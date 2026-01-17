@@ -1,0 +1,11 @@
+apiVersion: backstage.io/v1beta2
+kind: Template
+metadata:
+  name: spring-boot-base
+  title: Spring Boot Base Template
+  description: Base template for Spring Boot services
+spec:
+  owner: platform
+  type: service
+  path: './skeleton'
+

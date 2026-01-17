@@ -1,0 +1,30 @@
+package com.example;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@SpringBootApplication
+public class Application {
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}
+
+@RestController
+class HelloController {
+    @GetMapping("/")
+    public String hello() {
+        return "Hello from ${{ values.component_id }}!";
+    }
+    
+    @GetMapping("/api/info")
+    public java.util.Map<String, String> info() {
+        return java.util.Map.of(
+            "service", "${{ values.component_id }}",
+            "description", "${{ values.description }}",
+            "version", "1.0.0"
+        );
+    }
+}

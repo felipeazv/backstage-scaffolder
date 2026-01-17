@@ -114,13 +114,16 @@ app.post('/api/scaffold', async (req, res) => {
   try {
     const {
       component_id,
-      description,
+      description: userDescription,
       owner,
       port,
       java_version,
       include_docker,
       include_k8s
     } = req.body;
+
+    // Use user description or default
+    const description = userDescription || 'A Spring Boot microservice created with Backstage and Scaffolder';
 
     console.log(`[SCAFFOLD] Creating service: ${component_id}`);
 
@@ -218,7 +221,7 @@ app.post('/api/scaffold', async (req, res) => {
     let githubRepoUrl = null;
     if (GITHUB_ENABLED) {
       try {
-        githubRepoUrl = await createGitHubRepo(component_id, description || `${component_id} service`);
+        githubRepoUrl = await createGitHubRepo(component_id, description);
         await pushToGitHub(projectDir, component_id, `Initial commit: ${component_id} service scaffolded by Backstage`);
         console.log(`[GITHUB] Code pushed to ${githubRepoUrl}`);
       } catch (error) {
@@ -644,6 +647,296 @@ node_modules/
 .env.*.local
 `;
 }
+
+// Download endpoint - creates a tar.gz of the project
+app.get('/download/:serviceName', async (req, res) => {
+  try {
+    const { serviceName } = req.params;
+    
+    if (!serviceName || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(serviceName)) {
+      return res.status(400).json({ error: 'Invalid service name' });
+    }
+    
+    const projectDir = path.join(PROJECTS_DIR, serviceName);
+    
+    if (!fs.existsSync(projectDir)) {
+      return res.status(404).json({ error: `Project ${serviceName} not found` });
+    }
+    
+    console.log(`[DOWNLOAD] Creating archive for ${serviceName}`);
+    
+    // Create tar.gz archive
+    const archivePath = path.join('/tmp', `${serviceName}.tar.gz`);
+    execSync(`cd "${PROJECTS_DIR}" && tar -czf "${archivePath}" "${serviceName}"`, { stdio: 'pipe' });
+    
+    res.download(archivePath, `${serviceName}.tar.gz`, (err) => {
+      // Clean up temporary file after sending
+      if (fs.existsSync(archivePath)) {
+        fs.unlinkSync(archivePath);
+      }
+      
+      if (err) {
+        console.error('[DOWNLOAD] Error sending file:', err.message);
+      } else {
+        console.log(`[DOWNLOAD] Successfully sent ${serviceName}.tar.gz`);
+      }
+    });
+    
+  } catch (error) {
+    console.error('[DOWNLOAD] Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Deploy endpoint - deploys the service to Kubernetes with streaming logs
+app.get('/api/deploy/:serviceName/stream', async (req, res) => {
+  const { serviceName } = req.params;
+  const port = req.query.port || 8080;
+  
+  if (!serviceName || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(serviceName)) {
+    return res.status(400).json({ error: 'Invalid service name' });
+  }
+  
+  const projectDir = path.join(PROJECTS_DIR, serviceName);
+  
+  if (!fs.existsSync(projectDir)) {
+    return res.status(404).json({ error: `Project ${serviceName} not found` });
+  }
+  
+  // Set up SSE (Server-Sent Events)
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+  
+  try {
+    sendEvent({ log: `Starting deployment for ${serviceName}...` });
+    
+    const k8sDir = path.join(projectDir, 'k8s');
+    
+    if (!fs.existsSync(k8sDir)) {
+      sendEvent({ error: 'No k8s directory found. Service was created without Kubernetes manifests.' });
+      return res.end();
+    }
+    
+    // Apply deployment
+    sendEvent({ log: 'Applying Kubernetes deployment...' });
+    try {
+      const deployOutput = execSync(`kubectl apply -f "${path.join(k8sDir, 'deployment.yaml')}"`, { encoding: 'utf8' });
+      sendEvent({ log: deployOutput.trim() });
+    } catch (error) {
+      sendEvent({ error: `Deployment failed: ${error.message}` });
+      return res.end();
+    }
+    
+    // Apply service
+    sendEvent({ log: 'Applying Kubernetes service...' });
+    try {
+      const svcOutput = execSync(`kubectl apply -f "${path.join(k8sDir, 'service.yaml')}"`, { encoding: 'utf8' });
+      sendEvent({ log: svcOutput.trim() });
+    } catch (error) {
+      sendEvent({ error: `Service creation failed: ${error.message}` });
+      return res.end();
+    }
+    
+    // Wait for pod to be ready
+    sendEvent({ log: 'Waiting for pod to be ready...' });
+    let attempts = 0;
+    const maxAttempts = 30;
+    
+    while (attempts < maxAttempts) {
+      try {
+        const podStatus = execSync(`kubectl get pods -l app=${serviceName} -o jsonpath='{.items[0].status.phase}'`, { encoding: 'utf8' });
+        sendEvent({ log: `Pod status: ${podStatus}` });
+        
+        if (podStatus.includes('Running')) {
+          sendEvent({ log: '✓ Pod is running!' });
+          break;
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        attempts++;
+      } catch (error) {
+        sendEvent({ log: `Waiting for pod... (${attempts}/${maxAttempts})` });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        attempts++;
+      }
+    }
+    
+    if (attempts >= maxAttempts) {
+      sendEvent({ error: 'Timeout waiting for pod to start' });
+      return res.end();
+    }
+    
+    // Get pod logs
+    sendEvent({ log: '\n--- Pod Logs ---' });
+    try {
+      const logs = execSync(`kubectl logs -l app=${serviceName} --tail=50`, { encoding: 'utf8' });
+      sendEvent({ log: logs });
+    } catch (error) {
+      sendEvent({ log: 'Could not retrieve logs yet' });
+    }
+    
+    // Success
+    sendEvent({ 
+      success: true,
+      log: `\n✓ Deployment complete! Service ${serviceName} is running on port ${port}`,
+      serviceName,
+      port
+    });
+    
+    res.end();
+    
+  } catch (error) {
+    sendEvent({ error: error.message });
+    res.end();
+  }
+});
+
+// Cleanup single service endpoint
+app.delete('/api/cleanup/:serviceName', async (req, res) => {
+  const { serviceName } = req.params;
+  
+  if (!serviceName || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(serviceName)) {
+    return res.status(400).json({ error: 'Invalid service name' });
+  }
+  
+  console.log(`[CLEANUP] Starting cleanup for ${serviceName}`);
+  const results = {
+    serviceName,
+    github: { deleted: false, error: null },
+    kubernetes: { deployment: false, service: false, error: null },
+    localStorage: { deleted: false, error: null }
+  };
+  
+  try {
+    // Delete GitHub repository
+    if (GITHUB_ENABLED) {
+      try {
+        await execAsync(`gh repo delete ${GITHUB_OWNER}/${serviceName} --yes`);
+        results.github.deleted = true;
+        console.log(`[CLEANUP] Deleted GitHub repo: ${GITHUB_OWNER}/${serviceName}`);
+      } catch (error) {
+        results.github.error = error.message;
+        console.log(`[CLEANUP] GitHub deletion failed or repo doesn't exist: ${error.message}`);
+      }
+    }
+    
+    // Delete Kubernetes deployment
+    try {
+      await execAsync(`kubectl delete deployment ${serviceName} --ignore-not-found=true`);
+      results.kubernetes.deployment = true;
+      console.log(`[CLEANUP] Deleted K8s deployment: ${serviceName}`);
+    } catch (error) {
+      results.kubernetes.error = error.message;
+    }
+    
+    // Delete Kubernetes service
+    try {
+      await execAsync(`kubectl delete service ${serviceName}-service --ignore-not-found=true`);
+      results.kubernetes.service = true;
+      console.log(`[CLEANUP] Deleted K8s service: ${serviceName}-service`);
+    } catch (error) {
+      if (!results.kubernetes.error) results.kubernetes.error = error.message;
+    }
+    
+    // Delete local storage
+    const projectDir = path.join(PROJECTS_DIR, serviceName);
+    if (fs.existsSync(projectDir)) {
+      fs.rmSync(projectDir, { recursive: true, force: true });
+      results.localStorage.deleted = true;
+      console.log(`[CLEANUP] Deleted local storage: ${projectDir}`);
+    }
+    
+    res.json({
+      success: true,
+      message: `Cleaned up service: ${serviceName}`,
+      details: results
+    });
+    
+  } catch (error) {
+    console.error('[CLEANUP] Error:', error.message);
+    res.status(500).json({ 
+      error: error.message,
+      details: results
+    });
+  }
+});
+
+// Cleanup all services endpoint
+app.delete('/api/cleanup-all', async (req, res) => {
+  console.log('[CLEANUP-ALL] Starting cleanup of all services');
+  const results = {
+    servicesFound: [],
+    github: { deleted: [], errors: [] },
+    kubernetes: { deleted: [], errors: [] },
+    localStorage: { deleted: [], errors: [] }
+  };
+  
+  try {
+    // Find all services in local storage
+    if (fs.existsSync(PROJECTS_DIR)) {
+      const services = fs.readdirSync(PROJECTS_DIR).filter(file => {
+        const fullPath = path.join(PROJECTS_DIR, file);
+        return fs.statSync(fullPath).isDirectory();
+      });
+      
+      results.servicesFound = services;
+      console.log(`[CLEANUP-ALL] Found ${services.length} services: ${services.join(', ')}`);
+      
+      // Delete each service
+      for (const serviceName of services) {
+        // Delete GitHub repository
+        if (GITHUB_ENABLED) {
+          try {
+            await execAsync(`gh repo delete ${GITHUB_OWNER}/${serviceName} --yes`);
+            results.github.deleted.push(serviceName);
+            console.log(`[CLEANUP-ALL] Deleted GitHub repo: ${GITHUB_OWNER}/${serviceName}`);
+          } catch (error) {
+            results.github.errors.push({ service: serviceName, error: error.message });
+          }
+        }
+        
+        // Delete Kubernetes resources
+        try {
+          await execAsync(`kubectl delete deployment ${serviceName} --ignore-not-found=true`);
+          await execAsync(`kubectl delete service ${serviceName}-service --ignore-not-found=true`);
+          results.kubernetes.deleted.push(serviceName);
+          console.log(`[CLEANUP-ALL] Deleted K8s resources: ${serviceName}`);
+        } catch (error) {
+          results.kubernetes.errors.push({ service: serviceName, error: error.message });
+        }
+        
+        // Delete local storage
+        const projectDir = path.join(PROJECTS_DIR, serviceName);
+        try {
+          fs.rmSync(projectDir, { recursive: true, force: true });
+          results.localStorage.deleted.push(serviceName);
+          console.log(`[CLEANUP-ALL] Deleted local storage: ${projectDir}`);
+        } catch (error) {
+          results.localStorage.errors.push({ service: serviceName, error: error.message });
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Cleaned up ${results.servicesFound.length} services`,
+      details: results
+    });
+    
+  } catch (error) {
+    console.error('[CLEANUP-ALL] Error:', error.message);
+    res.status(500).json({ 
+      error: error.message,
+      details: results
+    });
+  }
+});
 
 // Start server
 const PORT = process.env.PORT || 3000;

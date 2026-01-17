@@ -772,6 +772,8 @@ spec:
                             <button type="submit" id="submitBtn">📋 Generate Service</button>
                             <button type="button" id="downloadBtn" style="margin-left: 10px; background: #4caf50; display: none;">⬇️ Download Project</button>
                             <button type="button" id="deployBtn" style="margin-left: 10px; background: #ff9800; display: none;">🚀 Deploy to Kubernetes</button>
+                            <button type="button" id="cleanupBtn" style="margin-left: 10px; background: #f44336; display: none;">🗑️ Clean Up Service</button>
+                            <button type="button" id="cleanupAllBtn" style="margin-left: 10px; background: #d32f2f;">🗑️ Delete All Services</button>
                         </form>
 
                         <div id="message" style="display: none;"></div>
@@ -786,6 +788,7 @@ spec:
                 <script>
                     let lastServiceName = '';
                     let lastServicePort = 8080;
+                    const apiHost = location.hostname || 'localhost';
 
                     document.getElementById('scaffoldForm').addEventListener('submit', async (e) => {
                         e.preventDefault();
@@ -809,28 +812,32 @@ spec:
                         document.getElementById('submitBtn').disabled = true;
 
                         try {
-                            const apiUrl = `http://localhost:30300/api/scaffold`;
+                            const apiUrl = `http://${apiHost}:30300/api/scaffold`;
                             const response = await fetch(apiUrl, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify(formData)
                             });
 
-                            const result = await response.json();
+                            const _text = await response.text();
+                            let result;
+                            try { result = JSON.parse(_text); } catch (e) { result = { error: _text }; }
 
                             if (response.ok) {
-                                lastServiceName = formData.component_id;
-                                lastServicePort = formData.port;
+                              lastServiceName = formData.component_id;
+                              lastServicePort = formData.port;
                                 showMessage(`✅ Service created: ${formData.component_id}`, 'success');
                                 const infoBox = `<div class="info-box"><strong>📁 Local Path:</strong><br/><code>${result.localPath}</code><br/><br/><strong>Next steps:</strong><br/>1. Deploy to Kubernetes (button below)<br/>2. Or download and deploy manually<br/>3. Then: kubectl logs -l app=${formData.component_id}</div>`;
                                 showResponse(JSON.stringify(result, null, 2) + infoBox);
                                 document.getElementById('downloadBtn').style.display = 'inline-block';
                                 document.getElementById('deployBtn').style.display = 'inline-block';
+                                document.getElementById('cleanupBtn').style.display = 'inline-block';
                                 document.getElementById('scaffoldForm').reset();
                             } else {
                                 showMessage(`❌ Error: ${result.error}`, 'error');
                                 document.getElementById('downloadBtn').style.display = 'none';
                                 document.getElementById('deployBtn').style.display = 'none';
+                                document.getElementById('cleanupBtn').style.display = 'none';
                             }
                         } catch (error) {
                             showMessage(`❌ Connection error: ${error.message}`, 'error');
@@ -847,7 +854,7 @@ spec:
                         }
                         
                         try {
-                            const response = await fetch(`http://localhost:30300/download/${lastServiceName}`);
+                            const response = await fetch(`http://${apiHost}:30300/download/${lastServiceName}`);
                             if (response.ok) {
                                 const blob = await response.blob();
                                 const url = window.URL.createObjectURL(blob);
@@ -892,7 +899,7 @@ spec:
                         document.getElementById('response').appendChild(logsDiv);
                         
                         try {
-                            const eventSource = new EventSource(`http://localhost:30300/api/deploy/${lastServiceName}/stream?port=${lastServicePort}`);
+                            const eventSource = new EventSource(`http://${apiHost}:30300/api/deploy/${lastServiceName}/stream?port=${lastServicePort}`);
                             
                             eventSource.onmessage = (event) => {
                                 const data = JSON.parse(event.data);
@@ -928,6 +935,79 @@ spec:
                         } catch (error) {
                             showMessage(`Error deploying: ${error.message}`, 'error');
                             document.getElementById('deployBtn').disabled = false;
+                        }
+                    });
+
+                    document.getElementById('cleanupBtn').addEventListener('click', async () => {
+                        if (!lastServiceName) {
+                            showMessage('No service to clean up', 'error');
+                            return;
+                        }
+                        
+                        if (!confirm(`Are you sure you want to delete ${lastServiceName}? This will remove:\n- GitHub repository\n- Kubernetes deployment and service\n- Local storage`)) {
+                            return;
+                        }
+                        
+                        showMessage(`🗑️ Cleaning up ${lastServiceName}...`, 'loading');
+                        document.getElementById('cleanupBtn').disabled = true;
+                        
+                        try {
+                            const response = await fetch(`http://${apiHost}:30300/api/cleanup/${lastServiceName}`, {
+                                method: 'DELETE'
+                            });
+                            
+                            const _text = await response.text();
+                            let result;
+                            try { result = JSON.parse(_text); } catch (e) { result = { error: _text }; }
+
+                            if (response.ok) {
+                              showMessage(`✅ Successfully deleted ${lastServiceName}`, 'success');
+                              showResponse(JSON.stringify(result, null, 2));
+                                document.getElementById('cleanupBtn').style.display = 'none';
+                                document.getElementById('downloadBtn').style.display = 'none';
+                                document.getElementById('deployBtn').style.display = 'none';
+                                lastServiceName = '';
+                            } else {
+                                showMessage(`❌ Error: ${result.error}`, 'error');
+                            }
+                        } catch (error) {
+                            showMessage(`Error cleaning up: ${error.message}`, 'error');
+                        } finally {
+                            document.getElementById('cleanupBtn').disabled = false;
+                        }
+                    });
+
+                    document.getElementById('cleanupAllBtn').addEventListener('click', async () => {
+                        if (!confirm('⚠️ WARNING: This will delete ALL scaffolded services including:\n- All GitHub repositories\n- All Kubernetes deployments and services\n- All local storage\n\nThis action cannot be undone. Continue?')) {
+                            return;
+                        }
+                        
+                        showMessage('🗑️ Deleting all services...', 'loading');
+                        document.getElementById('cleanupAllBtn').disabled = true;
+                        
+                        try {
+                            const response = await fetch(`http://${apiHost}:30300/api/cleanup-all`, {
+                                method: 'DELETE'
+                            });
+                            
+                            const _text = await response.text();
+                            let result;
+                            try { result = JSON.parse(_text); } catch (e) { result = { error: _text }; }
+
+                            if (response.ok) {
+                              showMessage(`✅ Successfully deleted all services`, 'success');
+                              showResponse(JSON.stringify(result, null, 2));
+                                document.getElementById('cleanupBtn').style.display = 'none';
+                                document.getElementById('downloadBtn').style.display = 'none';
+                                document.getElementById('deployBtn').style.display = 'none';
+                                lastServiceName = '';
+                            } else {
+                                showMessage(`❌ Error: ${result.error}`, 'error');
+                            }
+                        } catch (error) {
+                            showMessage(`Error cleaning up all services: ${error.message}`, 'error');
+                        } finally {
+                            document.getElementById('cleanupAllBtn').disabled = false;
                         }
                     });
 

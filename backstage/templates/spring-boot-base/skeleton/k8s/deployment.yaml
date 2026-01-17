@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${{ values.component_id }}
+  labels:
+    app: ${{ values.component_id }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${{ values.component_id }}
+  template:
+    metadata:
+      labels:
+        app: ${{ values.component_id }}
+    spec:
+      containers:
+      - name: ${{ values.component_id }}
+        image: ${{ values.component_id }}:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: ${{ values.port }}
+        env:
+        - name: SERVER_PORT
+          value: "${{ values.port }}"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health
+            port: ${{ values.port }}
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: ${{ values.port }}
+          initialDelaySeconds: 20
+          periodSeconds: 5

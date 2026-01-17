@@ -27,7 +27,7 @@ spec:
           title: Description
           type: string
           description: Help others understand what this service does
-          default: A Spring Boot microservice
+          default: A Spring Boot microservice created with Backstage and Scaffolder
         owner:
           title: Owner
           type: string
@@ -64,28 +64,29 @@ spec:
           default: true
   steps:
     - id: fetch-base
-      name: Fetch base Spring Boot template
+      name: Fetch Base Template  
       action: fetch:template
       input:
         url: ./spring-boot-base
-        targetPath: ./
         values:
           component_id: ${{ parameters.component_id }}
           description: ${{ parameters.description }}
           owner: ${{ parameters.owner }}
           port: ${{ parameters.port }}
           java_version: ${{ parameters.java_version }}
-          include_docker: ${{ parameters.include_docker }}
-          include_k8s: ${{ parameters.include_k8s }}
+    
     - id: publish
-      name: Publish to repository
+      name: Publish to GitHub
       action: publish:github
       input:
         allowedHosts: ['github.com']
-        description: This is ${{ parameters.component_id }}
+        description: ${{ parameters.description }}
         repoUrl: github.com?owner=${{ parameters.owner }}&repo=${{ parameters.component_id }}
+        repoVisibility: public
+        defaultBranch: main
+    
     - id: register
-      name: Register in Backstage
+      name: Register in Catalog
       action: catalog:register
       input:
         repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
@@ -93,7 +94,7 @@ spec:
   output:
     links:
       - title: Repository
-        url: ${{ steps.publish.output.repoUrl }}
+        url: https://github.com/${{ parameters.owner }}/${{ parameters.component_id }}
       - title: Open in catalog
         icon: catalog
         entityRef: ${{ steps.register.output.entityRef }}
