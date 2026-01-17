@@ -28,7 +28,10 @@ spec:
               name: github-token
               key: token
         - name: GITHUB_OWNER
-          value: "YOUR_GITHUB_USERNAME"  # CHANGE THIS to your GitHub username or organization
+          valueFrom:
+            configMapKeyRef:
+              name: scaffolder-config
+              key: GITHUB_OWNER
         - name: PORT
           value: "3000"
         ports:

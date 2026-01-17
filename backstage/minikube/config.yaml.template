@@ -1,0 +1,12 @@
+---
+# Local configuration template
+# Copy this file to config.yaml and set your values
+# config.yaml is gitignored and won't be committed
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaffolder-config
+  labels:
+    app: scaffolder-service
+data:
+  GITHUB_OWNER: "YOUR_GITHUB_USERNAME"  # Change to your GitHub username

@@ -65,3 +65,4 @@ scaffolded-projects/*/
 # Kubernetes secrets (if any)
 *-secret.yaml
 secrets/
+backstage/minikube/config.yaml

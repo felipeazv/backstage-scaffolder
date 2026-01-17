@@ -29,16 +29,21 @@ minikube image load backstage:latest
 
 ### 4. Configure GitHub Owner
 
-Edit `backstage/minikube/scaffolder-deployment.yaml` and set your GitHub username:
-```yaml
-- name: GITHUB_OWNER
-  value: "YOUR_GITHUB_USERNAME"  # Change to your actual GitHub username
+Create your local configuration file (this won't be committed to git):
+```bash
+cd backstage/minikube
+cp config.yaml.template config.yaml
 ```
 
-Or use sed to update it:
+Edit `config.yaml` and set your GitHub username:
+```yaml
+data:
+  GITHUB_OWNER: "your-actual-username"
+```
+
+Apply the configuration:
 ```bash
-cd ../..
-sed -i '' 's/YOUR_GITHUB_USERNAME/your-actual-username/g' backstage/minikube/scaffolder-deployment.yaml
+kubectl apply -f config.yaml
 ```
 
 ### 5. Deploy to Minikube
