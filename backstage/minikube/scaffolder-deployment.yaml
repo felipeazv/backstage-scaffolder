@@ -19,7 +19,7 @@ spec:
       serviceAccountName: scaffolder-deployer
       containers:
       - name: scaffolder-service
-        image: scaffolder-service:v3
+        image: scaffolder-service:v9
         imagePullPolicy: IfNotPresent
         env:
         - name: GITHUB_TOKEN
@@ -34,6 +34,8 @@ spec:
               key: GITHUB_OWNER
         - name: PORT
           value: "3000"
+        - name: ALLOW_NAMESPACE_CREATION
+          value: "true"
         ports:
         - containerPort: 3000
           name: http
@@ -68,3 +70,8 @@ spec:
         hostPath:
           path: /var/run/docker.sock
           type: Socket
+
+# NOTE: Network requirements
+# - Nodes must be able to pull base images (Docker Hub) for in-cluster builds.
+# - If your cluster blocks outbound internet access, either pre-load base images
+#   on nodes or use a private registry accessible from the cluster.
