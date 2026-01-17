@@ -44,13 +44,45 @@ backstage-scaffolder/
 minikube start
 ```
 
-### 2. Deploy Backstage and Scaffolder Services
+### 2. Configure GitHub Integration (Required for Production)
+
+To enable automatic GitHub repository creation:
+
+1. Create a GitHub Personal Access Token (PAT):
+   - Go to https://github.com/settings/tokens
+   - Click "Generate new token" → "Generate new token (classic)"
+   - Name: "Backstage Scaffolder"
+   - Scopes: `repo` (full control)
+   - Generate and copy the token
+
+2. Create Kubernetes secret:
+   ```bash
+   kubectl create secret generic github-token --from-literal=token=YOUR_TOKEN_HERE
+   ```
+
+   Or use existing gh CLI token:
+   ```bash
+   kubectl create secret generic github-token --from-literal=token=$(gh auth token)
+   ```
+
+3. Build and load the scaffolder service image:
+   ```bash
+   cd scaffolder-service
+   docker build -t scaffolder-service:latest .
+   minikube image load scaffolder-service:latest
+   cd ..
+   ```
+
+**Note**: If you skip GitHub setup, services will still be scaffolded but won't be pushed to GitHub.
+
+### 3. Deploy Backstage and Scaffolder Services
 
 Deploy the complete stack to Minikube:
 
 ```bash
 cd backstage
 kubectl apply -f minikube-deployment-final.yaml
+kubectl apply -f scaffolder-deployment.yaml
 ```
 
 Wait for pods to be ready (this may take a few minutes):
@@ -72,7 +104,7 @@ You should see:
 - `backstage` deployment and `backstage-service` (NodePort 30700)
 - `scaffolder-service` deployment and service (NodePort 30300)
 
-### 3. Access Minikube Dashboard (Optional)
+### 4. Access Minikube Dashboard (Optional)
 
 ```bash
 minikube dashboard
@@ -115,10 +147,23 @@ http://localhost:30700
 3. Click "Create" to scaffold and deploy
 
 The scaffolder will:
+- **Check GitHub** for existing repository (prevents duplicates)
 - Generate a Spring Boot project from template
+- **Create GitHub repository** (if GitHub integration enabled)
+- **Push code to GitHub** with initial commit
 - Build a Docker image
 - Deploy to Minikube
 - Expose the service via NodePort
+
+**With GitHub Integration Enabled:**
+- Each service automatically gets its own GitHub repository
+- Repository URL: `https://github.com/YOUR_OWNER/service-name`
+- Clone with: `git clone https://github.com/YOUR_OWNER/service-name.git`
+- Name conflicts prevented by checking existing GitHub repos
+
+**Without GitHub Integration:**
+- Services scaffolded locally in the pod only
+- Files stored in ephemeral storage (lost on pod restart)
 
 ## Managing Scaffolded Services
 
@@ -181,26 +226,20 @@ kubectl delete clusterrole scaffolder-deployer
 
 ## Project Naming & Validation
 
-**Current Behavior:**
-- Projects are scaffolded into ephemeral K8s volumes (`emptyDir`)
+**Current Implementation (GitHub Integration):**
+When GitHub integration is enabled:
+- Before scaffolding → Checks if GitHub repository exists
+- If exists → Returns 409 Conflict error
+- If new → Creates repository and pushes code
+- Naming is validated against existing GitHub repositories
+- Prevents duplicate project names across pod restarts
+
+**Without GitHub Integration:**
+- Projects scaffolded into ephemeral K8s volumes (`emptyDir`)
 - Each pod restart clears the volume
-- Duplicate naming is only validated within the current pod session
+- Duplicate naming only validated within current pod session
 
-**Planned Approach:**
-Integrate with Backstage Catalog for persistent duplicate detection and future git integration:
-
-1. **Before scaffolding** → Query Backstage Catalog API for existing components
-   - Check: `GET /api/catalog/entities?filter=kind=component&name=<component_id>`
-   - Reject if component already exists
-
-2. **After successful deployment** → Register new component in Catalog
-   - Create: `POST /api/catalog/entities` with scaffolded service metadata
-
-3. **Future git integration** → Catalog entries point to repository URLs
-   - Each scaffolded project auto-registered with git repo link
-   - Single source of truth across pod restarts and replicas
-
-This keeps naming validation persistent and bridges naturally to a git-based workflow.
+**Recommendation**: Always enable GitHub integration for production use.
 
 ## Development
 

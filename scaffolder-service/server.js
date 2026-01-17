@@ -4,16 +4,102 @@ const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 const { execSync, exec } = require('child_process');
+const { promisify } = require('util');
+
+const execAsync = promisify(exec);
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-const PROJECTS_DIR = '/tmp/scaffolded-projects';
+const PROJECTS_DIR = '/projects/scaffolded-projects';
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
+const GITHUB_OWNER = process.env.GITHUB_OWNER || 'felipeazv';
 
 // Ensure projects directory exists
 if (!fs.existsSync(PROJECTS_DIR)) {
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+}
+
+// Check if GitHub is configured
+const GITHUB_ENABLED = !!GITHUB_TOKEN;
+if (GITHUB_ENABLED) {
+  console.log('[GITHUB] GitHub integration enabled for owner:', GITHUB_OWNER);
+  // Configure gh CLI with token
+  try {
+    execSync(`echo "${GITHUB_TOKEN}" | gh auth login --with-token`, { stdio: 'pipe' });
+    console.log('[GITHUB] GitHub CLI authenticated successfully');
+  } catch (error) {
+    console.error('[GITHUB] Failed to authenticate with GitHub CLI:', error.message);
+  }
+} else {
+  console.warn('[GITHUB] GitHub integration disabled - GITHUB_TOKEN not configured');
+}
+
+// Helper function to check if GitHub repo exists
+async function checkGitHubRepoExists(repoName) {
+  if (!GITHUB_ENABLED) return false;
+  
+  try {
+    await execAsync(`gh repo view ${GITHUB_OWNER}/${repoName}`);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Helper function to create GitHub repo
+async function createGitHubRepo(repoName, description) {
+  if (!GITHUB_ENABLED) {
+    throw new Error('GitHub integration not configured');
+  }
+  
+  try {
+    console.log(`[GITHUB] Creating repository: ${GITHUB_OWNER}/${repoName}`);
+    const { stdout } = await execAsync(
+      `gh repo create ${GITHUB_OWNER}/${repoName} --public --description "${description}" --clone=false`
+    );
+    console.log(`[GITHUB] Repository created successfully`);
+    return `https://github.com/${GITHUB_OWNER}/${repoName}`;
+  } catch (error) {
+    console.error('[GITHUB] Failed to create repository:', error.message);
+    throw new Error(`Failed to create GitHub repository: ${error.message}`);
+  }
+}
+
+// Helper function to initialize git and push to GitHub
+async function pushToGitHub(projectDir, repoName, commitMessage) {
+  if (!GITHUB_ENABLED) {
+    console.log('[GITHUB] Skipping git push - GitHub integration disabled');
+    return null;
+  }
+  
+  try {
+    const repoUrl = `https://github.com/${GITHUB_OWNER}/${repoName}.git`;
+    console.log(`[GITHUB] Initializing git in ${projectDir}`);
+    
+    // Initialize git repo
+    execSync('git init', { cwd: projectDir, stdio: 'pipe' });
+    execSync('git add .', { cwd: projectDir, stdio: 'pipe' });
+    execSync(`git commit -m "${commitMessage}"`, { cwd: projectDir, stdio: 'pipe' });
+    
+    // Add remote and push
+    execSync(`git remote add origin ${repoUrl}`, { cwd: projectDir, stdio: 'pipe' });
+    execSync('git branch -M main', { cwd: projectDir, stdio: 'pipe' });
+    
+    console.log(`[GITHUB] Pushing to ${repoUrl}`);
+    execSync(`git push -u origin main`, { 
+      cwd: projectDir, 
+      stdio: 'pipe',
+      env: { ...process.env, GIT_ASKPASS: 'echo', GIT_USERNAME: 'x-access-token', GIT_PASSWORD: GITHUB_TOKEN }
+    });
+    
+    console.log(`[GITHUB] Successfully pushed to GitHub`);
+    return repoUrl;
+  } catch (error) {
+    console.error('[GITHUB] Failed to push to GitHub:', error.message);
+    throw new Error(`Failed to push to GitHub: ${error.message}`);
+  }
 }
 
 // Health check
@@ -43,11 +129,23 @@ app.post('/api/scaffold', async (req, res) => {
       });
     }
 
+    // Check if GitHub repo already exists (name conflict validation)
+    if (GITHUB_ENABLED) {
+      const repoExists = await checkGitHubRepoExists(component_id);
+      if (repoExists) {
+        return res.status(409).json({ 
+          error: `GitHub repository ${GITHUB_OWNER}/${component_id} already exists`,
+          conflictType: 'github_repo'
+        });
+      }
+    }
+
     const projectDir = path.join(PROJECTS_DIR, component_id);
     
     if (fs.existsSync(projectDir)) {
       return res.status(409).json({ 
-        error: `Project ${component_id} already exists` 
+        error: `Project ${component_id} already exists in local storage`,
+        conflictType: 'local_directory'
       });
     }
 
@@ -114,10 +212,24 @@ app.post('/api/scaffold', async (req, res) => {
 
     console.log(`[SUCCESS] Project created at ${projectDir}`);
 
+    // Create GitHub repository and push code
+    let githubRepoUrl = null;
+    if (GITHUB_ENABLED) {
+      try {
+        githubRepoUrl = await createGitHubRepo(component_id, description || `${component_id} service`);
+        await pushToGitHub(projectDir, component_id, `Initial commit: ${component_id} service scaffolded by Backstage`);
+        console.log(`[GITHUB] Code pushed to ${githubRepoUrl}`);
+      } catch (error) {
+        console.error('[GITHUB] GitHub integration failed:', error.message);
+        // Continue without GitHub - don't fail the entire scaffolding
+      }
+    }
+
     res.json({
       success: true,
       message: `Service ${component_id} scaffolded successfully`,
       projectPath: projectDir,
+      githubRepo: githubRepoUrl,
       files: {
         pom: `${component_id}/pom.xml`,
         dockerfile: include_docker ? `${component_id}/Dockerfile` : null,
@@ -127,7 +239,16 @@ app.post('/api/scaffold', async (req, res) => {
           `${component_id}/src/main/java/${packagePath}/${controllerClassName}.java`
         ]
       },
-      nextSteps: [
+      nextSteps: githubRepoUrl ? [
+        `git clone ${githubRepoUrl}`,
+        `cd ${component_id}`,
+        'mvn clean package',
+        'docker build -t ' + component_id + ':latest .',
+        'minikube image load ' + component_id + ':latest',
+        'kubectl apply -f k8s/deployment.yaml',
+        'kubectl apply -f k8s/service.yaml',
+        `kubectl port-forward svc/${component_id}-service ${port}:${port}`
+      ] : [
         `cd ${projectDir}`,
         'mvn clean package',
         'docker build -t ' + component_id + ':latest .',
@@ -401,13 +522,14 @@ spec:
 }
 
 function generateCatalogInfo(serviceName, owner, description) {
+  const githubRepo = GITHUB_ENABLED ? `${GITHUB_OWNER}/${serviceName}` : `${owner}/${serviceName}`;
   return `apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
   name: ${serviceName}
   description: ${description}
   annotations:
-    github.com/project-slug: ${owner}/${serviceName}
+    github.com/project-slug: ${githubRepo}
     backstage.io/kubernetes-label-selector: 'app=${serviceName}'
 spec:
   type: service
