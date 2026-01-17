@@ -49,20 +49,30 @@ minikube start
 To enable automatic GitHub repository creation:
 
 1. Create a GitHub Personal Access Token (PAT):
-   - Go to https://github.com/settings/tokens
-   - Click "Generate new token" → "Generate new token (classic)"
+   - Go to https://github.com/settings/tokens/new
+   - Click "Generate new token (classic)"
    - Name: "Backstage Scaffolder"
-   - Scopes: `repo` (full control)
-   - Generate and copy the token
+   - **Required Scopes:**
+     - ✅ `repo` (Full control of private repositories)
+     - ✅ `delete_repo` (Delete repositories - needed for cleanup)
+   - Click "Generate token"
+   - **Copy the token** (starts with `ghp_` - you won't see it again!)
 
 2. Create Kubernetes secret:
    ```bash
    kubectl create secret generic github-token --from-literal=token=YOUR_TOKEN_HERE
    ```
 
-   Or use existing gh CLI token:
+   Example:
    ```bash
-   kubectl create secret generic github-token --from-literal=token=$(gh auth token)
+   kubectl create secret generic github-token --from-literal=token=ghp_YourActualTokenHere
+   ```
+
+   **Note**: If you need to update the token later:
+   ```bash
+   kubectl delete secret github-token
+   kubectl create secret generic github-token --from-literal=token=YOUR_NEW_TOKEN
+   kubectl rollout restart deployment/scaffolder-service
    ```
 
 3. Build and load the scaffolder service image:

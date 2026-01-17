@@ -75,7 +75,9 @@ async function pushToGitHub(projectDir, repoName, commitMessage) {
   }
   
   try {
-    const repoUrl = `https://github.com/${GITHUB_OWNER}/${repoName}.git`;
+    // Use token in the URL for authentication
+    const repoUrl = `https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${repoName}.git`;
+    const publicUrl = `https://github.com/${GITHUB_OWNER}/${repoName}.git`;
     console.log(`[GITHUB] Initializing git in ${projectDir}`);
     
     // Initialize git repo
@@ -87,17 +89,17 @@ async function pushToGitHub(projectDir, repoName, commitMessage) {
     execSync(`git remote add origin ${repoUrl}`, { cwd: projectDir, stdio: 'pipe' });
     execSync('git branch -M main', { cwd: projectDir, stdio: 'pipe' });
     
-    console.log(`[GITHUB] Pushing to ${repoUrl}`);
+    console.log(`[GITHUB] Pushing to ${publicUrl}`);
     execSync(`git push -u origin main`, { 
       cwd: projectDir, 
-      stdio: 'pipe',
-      env: { ...process.env, GIT_ASKPASS: 'echo', GIT_USERNAME: 'x-access-token', GIT_PASSWORD: GITHUB_TOKEN }
+      stdio: 'pipe'
     });
     
     console.log(`[GITHUB] Successfully pushed to GitHub`);
-    return repoUrl;
+    return publicUrl;
   } catch (error) {
     console.error('[GITHUB] Failed to push to GitHub:', error.message);
+    console.error('[GITHUB] Error details:', error.stderr?.toString() || error.stdout?.toString());
     throw new Error(`Failed to push to GitHub: ${error.message}`);
   }
 }
