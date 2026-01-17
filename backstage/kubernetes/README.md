@@ -27,6 +27,37 @@ Kubernetes cluster** (GKE, EKS, AKS, or self-managed)
 
 ## Environment-Specific Configuration
 
+## Configure GitHub owner (recommended)
+
+The Scaffolder reads the `GITHUB_OWNER` value from a `ConfigMap` named `scaffolder-config` in the target namespace. This keeps credentials and configuration separate from the deployment manifests.
+
+Create the ConfigMap in your namespace (example uses `backstage-prod`):
+
+```bash
+# From a literal value
+kubectl create configmap scaffolder-config --from-literal=GITHUB_OWNER=your-github-username -n backstage-prod
+
+# Or apply from a file (recommended for local edits):
+# Copy template, edit and apply
+cp ../../minikube/config.yaml.template config.yaml
+# edit config.yaml and set GITHUB_OWNER
+kubectl apply -f config.yaml -n backstage-prod
+```
+
+Also create the GitHub token secret (used by the deployment):
+
+```bash
+kubectl create secret generic github-token --from-literal=token=ghp_YourActualTokenHere -n backstage-prod
+```
+
+Then apply/update the Scaffolder deployment in the same namespace so it picks up the `ConfigMap` and secret:
+
+```bash
+kubectl apply -f scaffolder-deployment.yaml -n backstage-prod
+kubectl rollout restart deployment/scaffolder-service -n backstage-prod
+```
+
+
 These manifests can be deployed to different environments by adjusting:
 
 - **Namespace**: Create separate namespaces (`backstage-dev`, `backstage-test`, `backstage-stage`, `backstage-prod`)
