@@ -215,9 +215,27 @@ app.post('/api/scaffold', async (req, res) => {
       fs.writeFileSync(path.join(k8sDir, 'service.yaml'), service);
     }
 
-    // Persist scaffold metadata (namespace and other options)
-    const meta = { namespace: target_namespace || null };
-    fs.writeFileSync(path.join(projectDir, 'scaffold-metadata.json'), JSON.stringify(meta, null, 2));
+    // Validate and persist scaffold metadata (namespace and other options)
+    const meta = { namespace: null };
+    if (target_namespace && target_namespace.trim() !== '') {
+      if (!validateNamespace(target_namespace)) {
+        return res.status(400).json({ error: `Invalid or forbidden namespace: ${target_namespace}` });
+      }
+      meta.namespace = target_namespace;
+    }
+
+    try {
+      const metaPath = path.join(projectDir, 'scaffold-metadata.json');
+      fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+      // fsync by re-opening file to ensure write is flushed
+      const fd = fs.openSync(metaPath, 'r');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      console.log(`[SCAFFOLD] Wrote scaffold metadata to ${metaPath}: ${JSON.stringify(meta)}`);
+    } catch (err) {
+      console.error('[SCAFFOLD] Failed to write scaffold-metadata.json:', err.message);
+      // Continue but warn the user in response
+    }
 
     // Generate catalog-info.yaml
     const catalogInfo = generateCatalogInfo(component_id, owner, description);
