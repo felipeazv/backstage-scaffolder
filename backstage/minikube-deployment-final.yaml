@@ -107,29 +107,7 @@ spec:
           path: /var/run/docker.sock
           type: Socket
 ---
-# Old inline script version - keeping for reference, can be deleted
-# apiVersion: apps/v1
-# kind: Deployment
-# metadata:
-#   name: scaffolder-service-old
-#   labels:
-#     app: scaffolder-service-old
-# spec:
-#   replicas: 1
-#   selector:
-#     matchLabels:
-#       app: scaffolder-service-old
-#   template:
-#     metadata:
-#       labels:
-#         app: scaffolder-service-old
-#     spec:
-#       serviceAccountName: scaffolder-deployer
-#       containers:
-#       - name: scaffolder-service
-#         image: node:18-alpine
-#         command: ["/bin/sh"]
-#         args:
+
           - -c
           - |
             apk add --no-cache curl ca-certificates docker-cli && \
@@ -606,35 +584,35 @@ spec:
             EOFSERVER
 
             node server.js
-        ports:
-        - containerPort: 3000
-          name: http
-        volumeMounts:
-        - name: projects-volume
-          mountPath: /projects/scaffolded-projects
-        - name: docker-socket
-          mountPath: /var/run/docker.sock
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 10
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 3000
-          initialDelaySeconds: 5
-          periodSeconds: 5
-      volumes:
-      - name: projects-volume
-        hostPath:
-          path: /tmp/minikube-projects
-          type: DirectoryOrCreate
-      - name: docker-socket
-        hostPath:
-          path: /var/run/docker.sock
-          type: Socket
+            ports:
+              - containerPort: 3000
+                name: http
+            volumeMounts:
+              - name: projects-volume
+                mountPath: /projects/scaffolded-projects
+              - name: docker-socket
+                mountPath: /var/run/docker.sock
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 3000
+              initialDelaySeconds: 10
+              periodSeconds: 10
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 3000
+              initialDelaySeconds: 5
+              periodSeconds: 5
+            volumes:
+              - name: projects-volume
+                hostPath:
+                  path: /tmp/minikube-projects
+                  type: DirectoryOrCreate
+              - name: docker-socket
+                hostPath:
+                  path: /var/run/docker.sock
+                  type: Socket
 
 ---
 apiVersion: v1
