@@ -1,0 +1,67 @@
+---
+# Scaffolder Service Deployment with GitHub Integration
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaffolder-service
+  labels:
+    app: scaffolder-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scaffolder-service
+  template:
+    metadata:
+      labels:
+        app: scaffolder-service
+    spec:
+      serviceAccountName: scaffolder-deployer
+      containers:
+      - name: scaffolder-service
+        image: scaffolder-service:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: GITHUB_OWNER
+          value: "felipeazv"
+        - name: PORT
+          value: "3000"
+        ports:
+        - containerPort: 3000
+          name: http
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: projects
+          mountPath: /projects
+        - name: dockersock
+          mountPath: /var/run/docker.sock
+      volumes:
+      - name: projects
+        emptyDir: {}
+      - name: dockersock
+        hostPath:
+          path: /var/run/docker.sock
+          type: Socket

@@ -1,0 +1,337 @@
+# Production Deployment Guide
+
+This directory contains production-ready Kubernetes manifests for deploying Backstage and the Scaffolder Service to a production Kubernetes cluster (GKE, EKS, AKS, etc.).
+
+## Key Differences from Minikube
+
+| Feature | Minikube | Production |
+|---------|----------|------------|
+| **Image Source** | Local (`minikube image load`) | Container Registry (Docker Hub, GCR, ECR) |
+| **Service Type** | NodePort | ClusterIP + Ingress |
+| **Replicas** | 1 | 2+ (High Availability) |
+| **Storage** | emptyDir (ephemeral) | PersistentVolumeClaim |
+| **Docker Socket** | Mounted (insecure) | ❌ Not mounted - use CI/CD |
+| **Security** | Minimal | SecurityContext, NetworkPolicies |
+| **TLS/HTTPS** | No | Yes (via Ingress) |
+| **Monitoring** | kubectl logs | Prometheus, Grafana, Cloud Logging |
+
+## Prerequisites
+
+1. **Production Kubernetes cluster** (GKE, EKS, AKS, or self-managed)
+2. **kubectl** configured to access your cluster
+3. **Container Registry** access (Docker Hub, GCR, ECR, ACR)
+4. **Domain name** for Ingress
+5. **Ingress Controller** installed (nginx-ingress, or cloud provider)
+6. **cert-manager** (optional, for automatic TLS certificates)
+7. **GitHub Personal Access Token** with `repo` and `delete_repo` scopes
+
+## Setup Steps
+
+### 1. Build and Push Images to Container Registry
+
+Choose your registry and update the image references in the deployment files.
+
+**Docker Hub:**
+```bash
+# Login
+docker login
+
+# Build and push scaffolder service
+cd scaffolder-service
+docker build -t yourorg/scaffolder-service:v1.0.0 .
+docker push yourorg/scaffolder-service:v1.0.0
+
+# Build and push Backstage (if you have a custom build)
+cd ../backstage/backstage-app
+# Build your Backstage Docker image
+docker build -t yourorg/backstage:v1.0.0 .
+docker push yourorg/backstage:v1.0.0
+```
+
+**Google Container Registry (GCR):**
+```bash
+# Configure Docker for GCR
+gcloud auth configure-docker
+
+# Build and push
+docker build -t gcr.io/YOUR_PROJECT_ID/scaffolder-service:v1.0.0 .
+docker push gcr.io/YOUR_PROJECT_ID/scaffolder-service:v1.0.0
+```
+
+**AWS ECR:**
+```bash
+# Login to ECR
+aws ecr get-login-password --region region | docker login --username AWS --password-stdin YOUR_ACCOUNT.dkr.ecr.region.amazonaws.com
+
+# Build and push
+docker build -t YOUR_ACCOUNT.dkr.ecr.region.amazonaws.com/scaffolder-service:v1.0.0 .
+docker push YOUR_ACCOUNT.dkr.ecr.region.amazonaws.com/scaffolder-service:v1.0.0
+```
+
+### 2. Update Image References
+
+Edit the deployment files and replace `YOUR_REGISTRY` with your actual registry:
+
+```bash
+# In production/scaffolder-deployment.yaml
+# Change: image: YOUR_REGISTRY/scaffolder-service:latest
+# To: image: docker.io/yourorg/scaffolder-service:v1.0.0
+
+# In production/backstage-deployment.yaml
+# Change: image: YOUR_REGISTRY/backstage:latest
+# To: image: docker.io/yourorg/backstage:v1.0.0
+```
+
+### 3. Configure Namespace (Recommended)
+
+Create a dedicated namespace for production:
+
+```bash
+kubectl create namespace backstage-prod
+kubectl config set-context --current --namespace=backstage-prod
+```
+
+Update the namespace in `scaffolder-deployment.yaml` ClusterRoleBinding:
+```yaml
+subjects:
+- kind: ServiceAccount
+  name: scaffolder-deployer
+  namespace: backstage-prod  # Change from 'default'
+```
+
+### 4. Create GitHub Token Secret
+
+```bash
+kubectl create secret generic github-token \
+  --from-literal=token=ghp_YourActualTokenHere \
+  -n backstage-prod
+```
+
+### 5. (Optional) Create Registry Credentials
+
+If using a private container registry:
+
+```bash
+kubectl create secret docker-registry registry-credentials \
+  --docker-server=YOUR_REGISTRY_URL \
+  --docker-username=YOUR_USERNAME \
+  --docker-password=YOUR_PASSWORD \
+  --docker-email=YOUR_EMAIL \
+  -n backstage-prod
+```
+
+Then uncomment `imagePullSecrets` in the deployment files.
+
+### 6. Configure DNS and Ingress
+
+**Update ingress.yaml with your domain:**
+```yaml
+# Change these in ingress.yaml:
+- backstage.yourdomain.com  → backstage.example.com
+- api.backstage.yourdomain.com  → api.backstage.example.com
+```
+
+**Point DNS to your cluster:**
+- **GKE**: Get Load Balancer IP from Ingress
+- **EKS**: Get Load Balancer hostname from Ingress
+- **AKS**: Get Load Balancer IP from Ingress
+
+```bash
+kubectl get ingress -n backstage-prod
+```
+
+Create DNS A/CNAME records pointing to the LoadBalancer IP/hostname.
+
+### 7. Install Ingress Controller (if not installed)
+
+**Nginx Ingress Controller:**
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+```
+
+**Or for specific cloud providers, follow their documentation:**
+- GKE: https://cloud.google.com/kubernetes-engine/docs/how-to/load-balance-ingress
+- EKS: https://docs.aws.amazon.com/eks/latest/userguide/alb-ingress.html
+- AKS: https://learn.microsoft.com/en-us/azure/aks/ingress-basic
+
+### 8. (Optional) Install cert-manager for TLS
+
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+```
+
+Create a ClusterIssuer for Let's Encrypt:
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: your-email@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+```
+
+### 9. Deploy to Production
+
+```bash
+# Apply in order:
+kubectl apply -f persistent-volume-claim.yaml
+kubectl apply -f scaffolder-deployment.yaml
+kubectl apply -f backstage-deployment.yaml
+kubectl apply -f ingress.yaml
+
+# Check deployment status
+kubectl get pods -n backstage-prod
+kubectl get svc -n backstage-prod
+kubectl get ingress -n backstage-prod
+```
+
+### 10. Verify Deployment
+
+```bash
+# Check pods are running
+kubectl get pods -n backstage-prod
+
+# Check logs
+kubectl logs -l app=backstage -n backstage-prod
+kubectl logs -l app=scaffolder-service -n backstage-prod
+
+# Test endpoints
+curl https://backstage.yourdomain.com/healthcheck
+curl https://api.backstage.yourdomain.com/health
+```
+
+## Important Security Notes
+
+### ⚠️ Docker Socket Removed
+The production deployment does NOT mount `/var/run/docker.sock`. This is a critical security requirement.
+
+**For building Docker images in production, use CI/CD instead:**
+
+1. When a service is scaffolded, code is pushed to GitHub
+2. GitHub Actions/GitLab CI/Jenkins builds the Docker image
+3. CI/CD pushes image to registry
+4. CI/CD updates Kubernetes deployment
+
+Example GitHub Actions workflow (create in scaffolded repos):
+```yaml
+name: Build and Deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build Docker image
+      run: docker build -t yourorg/service:${{ github.sha }} .
+    - name: Push to registry
+      run: docker push yourorg/service:${{ github.sha }}
+    - name: Deploy to Kubernetes
+      run: kubectl set image deployment/service service=yourorg/service:${{ github.sha }}
+```
+
+### 🔒 Additional Security Recommendations
+
+1. **Enable Pod Security Standards:**
+   ```bash
+   kubectl label namespace backstage-prod pod-security.kubernetes.io/enforce=restricted
+   ```
+
+2. **Create NetworkPolicies** to restrict pod-to-pod communication
+
+3. **Use Secrets management:**
+   - AWS: Secrets Manager + External Secrets Operator
+   - GCP: Secret Manager + External Secrets Operator
+   - Azure: Key Vault + External Secrets Operator
+
+4. **Enable audit logging** at the cluster level
+
+5. **Set up monitoring:**
+   - Prometheus for metrics
+   - Grafana for dashboards
+   - Cloud provider logging (CloudWatch, Stackdriver, Azure Monitor)
+
+## Scaling
+
+### Horizontal Pod Autoscaling (HPA)
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: scaffolder-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scaffolder-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+```
+
+### Vertical Pod Autoscaling
+
+Consider using VPA for automatic resource adjustment.
+
+## Backup and Disaster Recovery
+
+**Backup PersistentVolumes:**
+```bash
+# Use cloud provider snapshots or Velero
+velero backup create backstage-backup --include-namespaces backstage-prod
+```
+
+**Database Backups:**
+If using PostgreSQL, set up automated backups through your cloud provider.
+
+## Troubleshooting
+
+```bash
+# Check pod status
+kubectl get pods -n backstage-prod
+
+# View logs
+kubectl logs -f deployment/scaffolder-service -n backstage-prod
+
+# Describe resources
+kubectl describe pod <pod-name> -n backstage-prod
+
+# Check Ingress
+kubectl describe ingress backstage-ingress -n backstage-prod
+
+# Test service connectivity
+kubectl run -it --rm debug --image=busybox --restart=Never -- wget -O- http://scaffolder-service:3000/health
+```
+
+## Cost Optimization
+
+1. Use **cluster autoscaling** to scale nodes based on demand
+2. Set appropriate **resource limits** to avoid over-provisioning
+3. Use **spot/preemptible instances** for non-critical workloads
+4. Implement **pod disruption budgets** for graceful scaling
+
+## Next Steps
+
+- Set up CI/CD pipelines for automated deployments
+- Configure monitoring and alerting
+- Implement backup strategies
+- Set up disaster recovery procedures
+- Configure authentication (OAuth, SAML)
+- Enable audit logging
+- Implement rate limiting and API quotas

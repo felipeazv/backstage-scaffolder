@@ -1,0 +1,155 @@
+---
+# Production Scaffolder Service Deployment
+# NOTE: This version removes Docker socket mounting for security
+# Images should be built via CI/CD pipeline instead
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaffolder-service
+  labels:
+    app: scaffolder-service
+    environment: production
+spec:
+  replicas: 2  # High availability
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: scaffolder-service
+  template:
+    metadata:
+      labels:
+        app: scaffolder-service
+        environment: production
+    spec:
+      serviceAccountName: scaffolder-deployer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: scaffolder-service
+        # CHANGE THIS: Use your container registry
+        # Examples: 
+        #   - docker.io/yourorg/scaffolder-service:v1.0.0
+        #   - gcr.io/your-project/scaffolder-service:v1.0.0
+        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v1.0.0
+        image: YOUR_REGISTRY/scaffolder-service:latest
+        imagePullPolicy: Always
+        env:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: GITHUB_OWNER
+          value: "felipeazv"  # CHANGE THIS to your GitHub org/user
+        - name: PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: "production"
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: projects
+          mountPath: /projects
+      volumes:
+      - name: projects
+        persistentVolumeClaim:
+          claimName: scaffolder-pvc
+      # Uncomment if using private registry
+      # imagePullSecrets:
+      # - name: registry-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scaffolder-service
+  labels:
+    app: scaffolder-service
+    environment: production
+spec:
+  type: ClusterIP  # Use Ingress for external access
+  selector:
+    app: scaffolder-service
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  sessionAffinity: ClientIP
+---
+# ServiceAccount for scaffolder service
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scaffolder-deployer
+  labels:
+    app: scaffolder-service
+    environment: production
+---
+# ClusterRole for scaffolder operations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scaffolder-deployer-role
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["services", "pods"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get", "list"]
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scaffolder-deployer-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scaffolder-deployer-role
+subjects:
+- kind: ServiceAccount
+  name: scaffolder-deployer
+  namespace: default  # CHANGE THIS to your namespace

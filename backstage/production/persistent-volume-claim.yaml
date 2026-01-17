@@ -1,0 +1,22 @@
+---
+# PersistentVolumeClaim for scaffolder projects storage
+# This ensures data persists across pod restarts
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scaffolder-pvc
+  labels:
+    app: scaffolder-service
+    environment: production
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi  # Adjust based on needs
+  # Uncomment and set for specific storage class
+  # storageClassName: standard  # Use cloud provider storage class
+  # Examples:
+  #   GKE: standard-rwo, premium-rwo
+  #   EKS: gp2, gp3
+  #   AKS: managed-csi, managed-premium

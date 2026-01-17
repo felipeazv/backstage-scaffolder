@@ -1,0 +1,98 @@
+---
+# Production Backstage Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  labels:
+    app: backstage
+    environment: production
+spec:
+  replicas: 2  # High availability
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backstage
+  template:
+    metadata:
+      labels:
+        app: backstage
+        environment: production
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: backstage
+        # CHANGE THIS: Use your container registry
+        image: YOUR_REGISTRY/backstage:latest
+        imagePullPolicy: Always
+        env:
+        - name: NODE_ENV
+          value: "production"
+        # Add your environment variables here
+        # - name: POSTGRES_HOST
+        #   value: "postgres-service"
+        # - name: POSTGRES_PORT
+        #   value: "5432"
+        ports:
+        - containerPort: 7007
+          name: http
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthcheck
+            port: 7007
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /healthcheck
+            port: 7007
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+      # Uncomment if using private registry
+      # imagePullSecrets:
+      # - name: registry-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backstage-service
+  labels:
+    app: backstage
+    environment: production
+spec:
+  type: ClusterIP  # Use Ingress for external access
+  selector:
+    app: backstage
+  ports:
+  - port: 7007
+    targetPort: 7007
+    protocol: TCP
+    name: http
+  sessionAffinity: ClientIP

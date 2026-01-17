@@ -14,21 +14,48 @@ This project provides a complete developer platform that enables teams to:
 
 ```
 backstage-scaffolder/
-├── backstage/              # Backstage app & templates
+├── backstage/
+│   ├── minikube/           # Local development deployment configs
+│   ├── production/         # Production-ready K8s manifests
+│   ├── backstage-app/      # Backstage application code
+│   └── templates/          # Service scaffolding templates
 ├── scaffolder-service/     # Custom scaffolding API
 ├── hello-world/            # Sample Spring Boot app
-└── scaffolded-projects/    # Generated services
+└── scaffolded-projects/    # Generated services (local)
 ```
 
 ### Components
 
-- **Backstage**: Developer portal UI running on port 30700
-- **Scaffolder Service**: REST API for project generation (port 30300)
-- **Minikube**: Local Kubernetes cluster for deployments
-- **Sample Projects**: Reference implementations for scaffolding
+- **Backstage**: Developer portal UI (port 30700 in Minikube)
+- **Scaffolder Service**: REST API for project generation (port 30300 in Minikube)
+- **Deployment Configs**:
+### For Local Development (Minikube)
+- Docker Desktop
+- Minikube installed and running
+- kubectl CLI
+- Java 21+ (for local Spring Boot development)
+- Maven 3.6+
+- Node.js 18+ (for Backstage development)
+- GitHub Personal Access Token (with `repo` and `delete_repo` scopes)
 
-## Prerequisites
+### For Production Deployment
+See [`backstage/production/README.md`](backstage/production/README.md) for production prerequisites including:
+- Production Kubernetes cluster (GKE, EKS, AKS)
+- Container registry (Docker Hub, GCR, ECR, ACR)
+- IDeployment Options
 
+Choose your deployment environment:
+
+- **[Local Development (Minikube)](backstage/minikube/README.md)** - Fast local iteration, NodePort access, Docker socket mounting
+- **[Production Deployment](backstage/production/README.md)** - HA setup, Ingress, PVC, security hardened, CI/CD ready
+
+---
+
+## Quick Start (Minikube)
+
+For full Minikube setup instructions, see [`backstage/minikube/README.md`](backstage/minikube/README.md)roller
+- Domain name and DNS configuration
+- TLS/SSL certificates (via cert-manager or cloud provider
 - Docker Desktop
 - Minikube installed and running
 - kubectl CLI
@@ -69,9 +96,8 @@ To enable automatic GitHub repository creation:
    ```
 
    **Note**: If you need to update the token later:
-   ```bash
-   kubectl delete secret github-token
-   kubectl create secret generic github-token --from-literal=token=YOUR_NEW_TOKEN
+kubectl apply -f backstage/minikube/backstage-deployment.yaml
+kubectl apply -f backstage/minikube/ secret generic github-token --from-literal=token=YOUR_NEW_TOKEN
    kubectl rollout restart deployment/scaffolder-service
    ```
 
