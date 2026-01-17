@@ -792,15 +792,22 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
       // ignore
     }
 
-    // If namespace is provided, create it idempotently
+    // If namespace is provided, optionally ensure it exists. By default we
+    // avoid creating namespaces because the scaffolder ServiceAccount may not
+    // have cluster-wide rights. Set ALLOW_NAMESPACE_CREATION=true in the
+    // deployment to enable automatic creation.
     if (namespace) {
-      sendEvent({ log: `Ensuring namespace '${namespace}' exists...` });
-      try {
-        execSync(`kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -`, { stdio: 'pipe' });
-        sendEvent({ log: `Namespace ${namespace} ensured` });
-      } catch (err) {
-        sendEvent({ error: `Failed to ensure namespace ${namespace}: ${err.message}` });
-        return res.end();
+      if (process.env.ALLOW_NAMESPACE_CREATION === 'true') {
+        sendEvent({ log: `Ensuring namespace '${namespace}' exists...` });
+        try {
+          execSync(`kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -`, { stdio: 'pipe' });
+          sendEvent({ log: `Namespace ${namespace} ensured` });
+        } catch (err) {
+          sendEvent({ error: `Failed to ensure namespace ${namespace}: ${err.message}` });
+          return res.end();
+        }
+      } else {
+        sendEvent({ log: `Skipping namespace creation for '${namespace}' (ALLOW_NAMESPACE_CREATION not set). Ensure namespace exists manually.` });
       }
     }
 
