@@ -1,7 +1,7 @@
 FROM node:18-alpine
 
 # Install git, GitHub CLI, and kubectl
-RUN apk add --no-cache git github-cli curl && \
+RUN apk add --no-cache git github-cli curl docker && \
     curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
     chmod +x kubectl && \
     mv kubectl /usr/local/bin/
