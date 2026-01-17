@@ -1,0 +1,557 @@
+---
+# Scaffolder Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaffolder-service
+  labels:
+    app: scaffolder-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scaffolder-service
+  template:
+    metadata:
+      labels:
+        app: scaffolder-service
+    spec:
+      containers:
+      - name: scaffolder-service
+        image: node:18-alpine
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            mkdir -p /app && cd /app
+            cat > package.json <<'EOFPKG'
+            {
+              "name": "scaffolder-service",
+              "version": "1.0.0",
+              "description": "Backstage Software Template Scaffolder",
+              "main": "server.js",
+              "scripts": {
+                "start": "node server.js"
+              },
+              "dependencies": {
+                "express": "^4.18.2",
+                "cors": "^2.8.5",
+                "body-parser": "^1.20.2"
+              }
+            }
+            EOFPKG
+            
+            npm install --production 2>&1 | tail -20
+            
+            cat > server.js <<'EOFSERVER'
+            const express = require('express');
+            const cors = require('cors');
+            const bodyParser = require('body-parser');
+            const fs = require('fs');
+            const path = require('path');
+
+            const app = express();
+            app.use(cors());
+            app.use(bodyParser.json({ limit: '10mb' }));
+
+            const PROJECTS_DIR = '/tmp/scaffolded-projects';
+            if (!fs.existsSync(PROJECTS_DIR)) {
+              fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+            }
+
+            app.get('/health', (req, res) => {
+              res.json({ status: 'ok', service: 'scaffolder' });
+            });
+
+            app.post('/api/scaffold', async (req, res) => {
+              try {
+                const {
+                  component_id,
+                  description,
+                  owner,
+                  port,
+                  java_version,
+                  include_docker,
+                  include_k8s
+                } = req.body;
+
+                console.log(`[SCAFFOLD] Creating service: ${component_id}`);
+
+                if (!component_id || !/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(component_id)) {
+                  return res.status(400).json({ 
+                    error: 'Invalid component_id' 
+                  });
+                }
+
+                const projectDir = path.join(PROJECTS_DIR, component_id);
+                if (fs.existsSync(projectDir)) {
+                  return res.status(409).json({ 
+                    error: `Project ${component_id} already exists` 
+                  });
+                }
+
+                const packageName = `com.example.${component_id.replace(/-/g, '')}`;
+                const packagePath = packageName.split('.').join('/');
+                const srcDir = path.join(projectDir, 'src', 'main', 'java', packagePath);
+                const resourcesDir = path.join(projectDir, 'src', 'main', 'resources');
+                const k8sDir = path.join(projectDir, 'k8s');
+
+                [srcDir, resourcesDir, k8sDir].forEach(dir => {
+                  fs.mkdirSync(dir, { recursive: true });
+                });
+
+                const appClassName = component_id.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('') + 'Application';
+                const controllerClassName = appClassName.replace('Application', 'Controller');
+
+                fs.writeFileSync(path.join(projectDir, 'pom.xml'), generatePomXml(component_id, packageName, java_version));
+                fs.writeFileSync(path.join(resourcesDir, 'application.properties'), generateApplicationProperties(port));
+                fs.writeFileSync(path.join(srcDir, `${appClassName}.java`), generateApplicationClass(packageName, appClassName));
+                fs.writeFileSync(path.join(srcDir, `${controllerClassName}.java`), generateController(packageName, controllerClassName, component_id));
+
+                if (include_docker) {
+                  fs.writeFileSync(path.join(projectDir, 'Dockerfile'), generateDockerfile(component_id, java_version));
+                }
+
+                if (include_k8s) {
+                  fs.writeFileSync(path.join(k8sDir, 'deployment.yaml'), generateK8sDeployment(component_id, owner, port));
+                  fs.writeFileSync(path.join(k8sDir, 'service.yaml'), generateK8sService(component_id, port));
+                }
+
+                fs.writeFileSync(path.join(projectDir, 'catalog-info.yaml'), generateCatalogInfo(component_id, owner, description));
+                fs.writeFileSync(path.join(projectDir, 'README.md'), generateReadme(component_id, description, port));
+                fs.writeFileSync(path.join(projectDir, '.gitignore'), generateGitignore());
+
+                console.log(`[SUCCESS] Project created: ${projectDir}`);
+
+                res.json({
+                  success: true,
+                  message: `Service ${component_id} scaffolded successfully`,
+                  projectPath: projectDir,
+                  files: {
+                    pom: `${component_id}/pom.xml`,
+                    source: [
+                      `${component_id}/src/main/java/${packagePath}/${appClassName}.java`,
+                      `${component_id}/src/main/java/${packagePath}/${controllerClassName}.java`
+                    ]
+                  }
+                });
+              } catch (error) {
+                console.error('[ERROR]', error);
+                res.status(500).json({ error: error.message });
+              }
+            });
+
+            function generatePomXml(serviceName, packageName, javaVersion) {
+              return `<?xml version="1.0" encoding="UTF-8"?>
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+                <modelVersion>4.0.0</modelVersion>
+                <groupId>com.example</groupId>
+                <artifactId>${serviceName}</artifactId>
+                <version>1.0.0</version>
+                <packaging>jar</packaging>
+                <name>${serviceName}</name>
+                <parent>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-parent</artifactId>
+                    <version>3.2.1</version>
+                </parent>
+                <properties>
+                    <java.version>${javaVersion}</java.version>
+                </properties>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-starter-web</artifactId>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-starter-actuator</artifactId>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-starter-test</artifactId>
+                        <scope>test</scope>
+                    </dependency>
+                </dependencies>
+                <build>
+                    <plugins>
+                        <plugin>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-maven-plugin</artifactId>
+                        </plugin>
+                    </plugins>
+                </build>
+            </project>`;
+            }
+
+            function generateApplicationProperties(port) {
+              return `server.port=${port}\nspring.application.name=spring-boot-service\nmanagement.endpoints.web.exposure.include=health,info\n`;
+            }
+
+            function generateApplicationClass(packageName, className) {
+              return `package ${packageName};
+            import org.springframework.boot.SpringApplication;
+            import org.springframework.boot.autoconfigure.SpringBootApplication;
+            @SpringBootApplication
+            public class ${className} {
+                public static void main(String[] args) {
+                    SpringApplication.run(${className}.class, args);
+                }
+            }`;
+            }
+
+            function generateController(packageName, className, serviceName) {
+              return `package ${packageName};
+            import org.springframework.web.bind.annotation.GetMapping;
+            import org.springframework.web.bind.annotation.RestController;
+            @RestController
+            public class ${className} {
+                @GetMapping("/")
+                public java.util.Map<String, String> root() {
+                    java.util.Map<String, String> r = new java.util.HashMap<>();
+                    r.put("service", "${serviceName}");
+                    r.put("status", "running");
+                    return r;
+                }
+                @GetMapping("/health")
+                public java.util.Map<String, String> health() {
+                    java.util.Map<String, String> r = new java.util.HashMap<>();
+                    r.put("status", "UP");
+                    return r;
+                }
+            }`;
+            }
+
+            function generateDockerfile(serviceName, javaVersion) {
+              return `FROM maven:3.9.2-eclipse-temurin-${javaVersion} AS builder
+            WORKDIR /build
+            COPY . .
+            RUN mvn clean package -DskipTests
+            FROM eclipse-temurin:${javaVersion}-jre-alpine
+            WORKDIR /app
+            COPY --from=builder /build/target/*.jar app.jar
+            EXPOSE 8080
+            CMD ["java", "-jar", "app.jar"]`;
+            }
+
+            function generateK8sDeployment(serviceName, owner, port) {
+              return `apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: ${serviceName}
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: ${serviceName}
+              template:
+                metadata:
+                  labels:
+                    app: ${serviceName}
+                spec:
+                  containers:
+                  - name: ${serviceName}
+                    image: ${serviceName}:latest
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                    - containerPort: ${port}
+                    livenessProbe:
+                      httpGet:
+                        path: /health
+                        port: ${port}
+                      initialDelaySeconds: 30
+                    readinessProbe:
+                      httpGet:
+                        path: /health
+                        port: ${port}
+                      initialDelaySeconds: 15`;
+            }
+
+            function generateK8sService(serviceName, port) {
+              return `apiVersion: v1
+            kind: Service
+            metadata:
+              name: ${serviceName}-service
+            spec:
+              type: NodePort
+              ports:
+              - port: ${port}
+                targetPort: ${port}
+              selector:
+                app: ${serviceName}`;
+            }
+
+            function generateCatalogInfo(serviceName, owner, description) {
+              return `apiVersion: backstage.io/v1alpha1
+            kind: Component
+            metadata:
+              name: ${serviceName}
+            spec:
+              type: service
+              owner: ${owner}
+              lifecycle: production`;
+            }
+
+            function generateReadme(serviceName, description, port) {
+              return `# ${serviceName}\n${description}\nPort: ${port}`;
+            }
+
+            function generateGitignore() {
+              return `target/\n.idea/\n.vscode/\nnode_modules/`;
+            }
+
+            const PORT = 3000;
+            app.listen(PORT, '0.0.0.0', () => {
+              console.log(`Scaffolder listening on port ${PORT}`);
+            });
+            EOFSERVER
+
+            node server.js
+        ports:
+        - containerPort: 3000
+          name: http
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scaffolder-service
+  labels:
+    app: scaffolder-service
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: scaffolder-service
+
+---
+# Backstage UI Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  labels:
+    app: backstage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backstage
+  template:
+    metadata:
+      labels:
+        app: backstage
+    spec:
+      containers:
+      - name: backstage
+        image: node:18
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            npm install -g http-server
+            mkdir -p /app/public
+            cd /app
+            cat > public/index.html <<'EOFHTML'
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Backstage Developer Portal</title>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto; background: linear-gradient(135deg, #1a237e 0%, #283593 100%); min-height: 100vh; }
+                    header { background: rgba(0, 0, 0, 0.7); color: white; padding: 20px 40px; border-bottom: 3px solid #1976d2; }
+                    header h1 { font-size: 28px; margin-bottom: 5px; }
+                    .container { max-width: 1200px; margin: 40px auto; padding: 0 20px; }
+                    .content-section { background: white; border-radius: 8px; padding: 40px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+                    h2 { color: #1976d2; margin-bottom: 20px; font-size: 24px; border-bottom: 2px solid #90caf9; padding-bottom: 10px; }
+                    .form-group { margin-bottom: 20px; }
+                    label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+                    input, select, textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-family: inherit; }
+                    input:focus, select:focus, textarea:focus { outline: none; border-color: #1976d2; box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1); }
+                    button { background: #1976d2; color: white; padding: 12px 30px; border: none; border-radius: 6px; cursor: pointer; }
+                    button:hover { background: #1565c0; }
+                    .alert { padding: 15px; margin: 20px 0; border-radius: 6px; border-left: 4px solid #2196f3; }
+                    .alert.success { border-color: #4caf50; background: #e8f5e9; color: #2e7d32; }
+                    .alert.error { border-color: #f44336; background: #ffebee; color: #c62828; }
+                    .alert.loading { border-color: #2196f3; background: #e3f2fd; color: #1565c0; }
+                    .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+                    .response { background: #f5f5f5; padding: 15px; border-radius: 6px; margin-top: 20px; white-space: pre-wrap; overflow-x: auto; font-family: monospace; }
+                    footer { text-align: center; padding: 20px; color: white; opacity: 0.8; }
+                </style>
+            </head>
+            <body>
+                <header>
+                    <h1>🎭 Backstage Developer Portal</h1>
+                    <p>Automated Spring Boot Service Scaffolding on Minikube</p>
+                </header>
+
+                <div class="container">
+                    <div class="content-section">
+                        <h2>🚀 Create New Spring Boot Service</h2>
+                        <p style="color: #666; margin-bottom: 20px;">This form generates a complete Spring Boot microservice with Docker and Kubernetes support.</p>
+                        
+                        <form id="scaffoldForm">
+                            <h3 style="color: #1976d2; margin: 20px 0 15px;">Project Information</h3>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="component_id">Service Name *</label>
+                                    <input type="text" id="component_id" name="component_id" placeholder="e.g., user-service" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="owner">Owner *</label>
+                                    <input type="text" id="owner" name="owner" placeholder="e.g., platform-team" required>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="description">Description</label>
+                                <textarea id="description" name="description" rows="2" placeholder="Service description">A Spring Boot microservice</textarea>
+                            </div>
+
+                            <h3 style="color: #1976d2; margin: 30px 0 15px;">Deployment Configuration</h3>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="port">Server Port</label>
+                                    <input type="number" id="port" name="port" value="8080" min="1024" max="65535">
+                                </div>
+                                <div class="form-group">
+                                    <label for="java_version">Java Version</label>
+                                    <select id="java_version" name="java_version">
+                                        <option value="11">Java 11</option>
+                                        <option value="17">Java 17</option>
+                                        <option value="21" selected>Java 21</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <label style="display: flex; align-items: center;">
+                                    <input type="checkbox" id="include_docker" name="include_docker" checked style="width: auto; margin-right: 10px;">
+                                    Include Docker support
+                                </label>
+                                <label style="display: flex; align-items: center;">
+                                    <input type="checkbox" id="include_k8s" name="include_k8s" checked style="width: auto; margin-right: 10px;">
+                                    Include Kubernetes manifests
+                                </label>
+                            </div>
+
+                            <button type="submit" id="submitBtn">📋 Generate Service</button>
+                        </form>
+
+                        <div id="message" style="display: none;"></div>
+                        <div id="response"></div>
+                    </div>
+                </div>
+
+                <footer>
+                    <p>🎭 Backstage Developer Portal | Minikube Integration</p>
+                </footer>
+
+                <script>
+                    document.getElementById('scaffoldForm').addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        
+                        const formData = {
+                            component_id: document.getElementById('component_id').value,
+                            description: document.getElementById('description').value,
+                            owner: document.getElementById('owner').value,
+                            port: parseInt(document.getElementById('port').value),
+                            java_version: document.getElementById('java_version').value,
+                            include_docker: document.getElementById('include_docker').checked,
+                            include_k8s: document.getElementById('include_k8s').checked
+                        };
+
+                        if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(formData.component_id)) {
+                            showMessage('Service name must be lowercase alphanumeric with hyphens', 'error');
+                            return;
+                        }
+
+                        showMessage('Scaffolding in progress...', 'loading');
+                        document.getElementById('submitBtn').disabled = true;
+
+                        try {
+                            const response = await fetch('http://scaffolder-service:3000/api/scaffold', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(formData)
+                            });
+
+                            const result = await response.json();
+
+                            if (response.ok) {
+                                showMessage(`✅ Service created: ${formData.component_id}`, 'success');
+                                showResponse(JSON.stringify(result, null, 2));
+                                document.getElementById('scaffoldForm').reset();
+                            } else {
+                                showMessage(`❌ Error: ${result.error}`, 'error');
+                            }
+                        } catch (error) {
+                            showMessage(`❌ Connection error: ${error.message}`, 'error');
+                        } finally {
+                            document.getElementById('submitBtn').disabled = false;
+                        }
+                    });
+
+                    function showMessage(msg, type) {
+                        const msgDiv = document.getElementById('message');
+                        msgDiv.innerHTML = `<div class="alert ${type}">${msg}</div>`;
+                        msgDiv.style.display = 'block';
+                    }
+
+                    function showResponse(content) {
+                        document.getElementById('response').innerHTML = `<div class="response">${content}</div>`;
+                    }
+                </script>
+            </body>
+            </html>
+            EOFHTML
+            http-server ./public -p 7000
+        ports:
+        - containerPort: 7000
+          name: http
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 7000
+          initialDelaySeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 7000
+          initialDelaySeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backstage-service
+  labels:
+    app: backstage
+spec:
+  type: NodePort
+  ports:
+  - port: 7000
+    targetPort: 7000
+    nodePort: 30700
+    name: http
+  selector:
+    app: backstage

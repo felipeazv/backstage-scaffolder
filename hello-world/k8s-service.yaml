@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello-world-service
+  labels:
+    app: hello-world
+spec:
+  type: NodePort
+  ports:
+  - port: 9999
+    targetPort: 9999
+    protocol: TCP
+    name: http
+    nodePort: 30999
+  selector:
+    app: hello-world

@@ -1,0 +1,406 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  labels:
+    app: backstage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backstage
+  template:
+    metadata:
+      labels:
+        app: backstage
+    spec:
+      containers:
+      - name: backstage
+        image: node:18
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            npm install -g http-server
+            mkdir -p /app/public
+            cd /app
+            cat > public/index.html <<'EOFHTML'
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Backstage Developer Portal</title>
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                        background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+                        color: #333;
+                        min-height: 100vh;
+                    }
+                    header {
+                        background: rgba(0, 0, 0, 0.7);
+                        color: white;
+                        padding: 20px 40px;
+                        border-bottom: 3px solid #1976d2;
+                        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                    }
+                    header h1 { font-size: 28px; margin-bottom: 5px; }
+                    header p { font-size: 14px; opacity: 0.9; }
+                    .container {
+                        max-width: 1200px;
+                        margin: 40px auto;
+                        padding: 0 20px;
+                    }
+                    .content-section {
+                        background: white;
+                        border-radius: 8px;
+                        padding: 40px;
+                        margin-bottom: 30px;
+                        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                    }
+                    h2 {
+                        color: #1976d2;
+                        margin-bottom: 20px;
+                        font-size: 24px;
+                        border-bottom: 2px solid #90caf9;
+                        padding-bottom: 10px;
+                    }
+                    .nav-grid {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                        gap: 20px;
+                        margin-top: 20px;
+                    }
+                    .nav-card {
+                        background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
+                        color: white;
+                        padding: 30px 20px;
+                        border-radius: 8px;
+                        text-align: center;
+                        text-decoration: none;
+                        transition: all 0.3s ease;
+                        cursor: pointer;
+                        box-shadow: 0 2px 8px rgba(25, 118, 210, 0.2);
+                    }
+                    .nav-card:hover {
+                        transform: translateY(-5px);
+                        box-shadow: 0 8px 16px rgba(25, 118, 210, 0.3);
+                    }
+                    .nav-card h3 { margin-bottom: 10px; font-size: 18px; }
+                    .nav-card p { font-size: 13px; opacity: 0.95; }
+                    .icon { font-size: 40px; margin-bottom: 10px; }
+                    .status-grid {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                        gap: 15px;
+                        margin-top: 20px;
+                    }
+                    .status-card {
+                        background: #f5f5f5;
+                        padding: 20px;
+                        border-radius: 6px;
+                        border-left: 4px solid #4caf50;
+                    }
+                    .status-card h4 { color: #333; margin-bottom: 8px; font-size: 14px; }
+                    .status-value { color: #1976d2; font-size: 20px; font-weight: bold; }
+                    .template-form {
+                        background: #f9f9f9;
+                        padding: 30px;
+                        border-radius: 8px;
+                        margin-top: 20px;
+                        border: 1px solid #e0e0e0;
+                    }
+                    .form-group { margin-bottom: 20px; }
+                    label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+                    input[type="text"], input[type="number"], select, textarea {
+                        width: 100%;
+                        padding: 12px;
+                        border: 1px solid #ddd;
+                        border-radius: 6px;
+                        font-family: inherit;
+                        font-size: 14px;
+                    }
+                    .form-row {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                        gap: 20px;
+                    }
+                    button {
+                        background: #1976d2;
+                        color: white;
+                        padding: 12px 30px;
+                        border: none;
+                        border-radius: 6px;
+                        font-size: 16px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        transition: all 0.3s ease;
+                        margin-top: 10px;
+                    }
+                    button:hover {
+                        background: #1565c0;
+                        transform: translateY(-2px);
+                        box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
+                    }
+                    .alert {
+                        padding: 15px;
+                        margin-bottom: 20px;
+                        border-radius: 6px;
+                        border-left: 4px solid #2196f3;
+                        background: #e3f2fd;
+                        color: #1565c0;
+                    }
+                    .alert.success {
+                        border-color: #4caf50;
+                        background: #e8f5e9;
+                        color: #2e7d32;
+                    }
+                    footer {
+                        text-align: center;
+                        padding: 20px;
+                        color: white;
+                        margin-top: 40px;
+                        opacity: 0.8;
+                    }
+                    code {
+                        background: #f5f5f5;
+                        padding: 2px 6px;
+                        border-radius: 3px;
+                        font-family: 'Courier New', monospace;
+                        font-size: 13px;
+                    }
+                    pre {
+                        background: #f5f5f5;
+                        padding: 15px;
+                        border-radius: 6px;
+                        overflow-x: auto;
+                        font-family: 'Courier New', monospace;
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                    }
+                </style>
+            </head>
+            <body>
+                <header>
+                    <h1>🎭 Backstage Developer Portal</h1>
+                    <p>Unified platform for managing your microservices and templates</p>
+                </header>
+
+                <div class="container">
+                    <div class="content-section">
+                        <h2>Quick Navigation</h2>
+                        <div class="nav-grid">
+                            <div class="nav-card" onclick="document.getElementById('scaffolder').scrollIntoView({behavior: 'smooth'})">
+                                <div class="icon">⚙️</div>
+                                <h3>Create Service</h3>
+                                <p>Use software templates to scaffold a new Spring Boot service</p>
+                            </div>
+                            <div class="nav-card" onclick="openService('http://localhost:9999/hello')">
+                                <div class="icon">🌍</div>
+                                <h3>Hello World API</h3>
+                                <p>Access the running hello-world microservice</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="content-section">
+                        <h2>System Status</h2>
+                        <div class="status-grid">
+                            <div class="status-card">
+                                <h4>Backstage Portal</h4>
+                                <div class="status-value">✅ Running</div>
+                            </div>
+                            <div class="status-card">
+                                <h4>Hello World Service</h4>
+                                <div class="status-value">✅ Available</div>
+                            </div>
+                            <div class="status-card">
+                                <h4>Kubernetes</h4>
+                                <div class="status-value">✅ Ready</div>
+                            </div>
+                            <div class="status-card">
+                                <h4>Templates</h4>
+                                <div class="status-value">✅ 1 Available</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="content-section" id="scaffolder">
+                        <h2>🚀 Create New Spring Boot Service</h2>
+                        <div class="alert alert-info">
+                            <strong>Software Templates:</strong> Use this form to scaffold a new Spring Boot microservice based on the hello-world template. Configuration schema for template generation:
+                        </div>
+
+                        <div class="template-form">
+                            <h3 style="color: #1976d2; margin-bottom: 20px;">Template Configuration Schema</h3>
+                            <form id="templateForm" onsubmit="handleSubmit(event)">
+                                <h4 style="color: #333; margin: 20px 0 15px 0;">Project Information</h4>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="component_id">Service Name *</label>
+                                        <input type="text" id="component_id" name="component_id" placeholder="e.g., user-service, payment-service" required>
+                                        <small style="color: #999; display: block; margin-top: 5px;">Unique identifier for your service</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="owner">Owner *</label>
+                                        <input type="text" id="owner" name="owner" placeholder="e.g., john.doe, platform-team" required>
+                                        <small style="color: #999; display: block; margin-top: 5px;">Team or person responsible</small>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="description">Description</label>
+                                    <textarea id="description" name="description" rows="3" placeholder="Describe what this service does...">A Spring Boot microservice</textarea>
+                                </div>
+
+                                <h4 style="color: #333; margin: 30px 0 15px 0;">Deployment Configuration</h4>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="port">Server Port *</label>
+                                        <input type="number" id="port" name="port" value="8080" min="1024" max="65535" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="java_version">Java Version *</label>
+                                        <select id="java_version" name="java_version" required>
+                                            <option value="11">Java 11 (LTS)</option>
+                                            <option value="17">Java 17 (LTS)</option>
+                                            <option value="21" selected>Java 21 (LTS)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label style="display: flex; align-items: center;">
+                                            <input type="checkbox" id="include_docker" name="include_docker" checked style="width: auto; margin-right: 10px;">
+                                            Include Docker support
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label style="display: flex; align-items: center;">
+                                            <input type="checkbox" id="include_k8s" name="include_k8s" checked style="width: auto; margin-right: 10px;">
+                                            Include Kubernetes manifests
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <button type="submit">📋 Generate Service Scaffold</button>
+                            </form>
+
+                            <div id="successMessage" class="alert alert-success" style="display: none; margin-top: 20px;">
+                                <strong>✅ Service configuration saved!</strong>
+                                <p id="generatedConfig"></p>
+                                <p style="margin-top: 10px;">Next steps:</p>
+                                <ol style="margin-left: 20px; margin-top: 10px;">
+                                    <li>Clone or download the generated project</li>
+                                    <li>Implement your service logic</li>
+                                    <li>Build Docker image</li>
+                                    <li>Deploy to Kubernetes</li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="content-section">
+                        <h2>📦 Available Templates</h2>
+                        <div class="nav-grid">
+                            <div class="nav-card" style="background: linear-gradient(135deg, #f57c00 0%, #e65100 100%); cursor: default;">
+                                <div class="icon">☕</div>
+                                <h3>Spring Boot Service</h3>
+                                <p>v1.0 - Scaffold a Spring Boot microservice with Docker and K8s</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <footer>
+                    <p>🎭 Backstage Developer Portal | Powered by Kubernetes on minikube</p>
+                </footer>
+
+                <script>
+                    function openService(url) {
+                        window.open(url, '_blank');
+                    }
+
+                    function handleSubmit(event) {
+                        event.preventDefault();
+                        const formData = {
+                            component_id: document.getElementById('component_id').value,
+                            description: document.getElementById('description').value,
+                            owner: document.getElementById('owner').value,
+                            port: document.getElementById('port').value,
+                            java_version: document.getElementById('java_version').value,
+                            include_docker: document.getElementById('include_docker').checked,
+                            include_k8s: document.getElementById('include_k8s').checked,
+                        };
+
+                        if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(formData.component_id)) {
+                            alert('Service name must be lowercase with alphanumeric characters and hyphens only');
+                            return;
+                        }
+
+                        const summary = `Service Name: ${formData.component_id}
+                    Owner: ${formData.owner}
+                    Description: ${formData.description}
+                    Port: ${formData.port}
+                    Java Version: ${formData.java_version}
+                    Docker: ${formData.include_docker ? 'Included' : 'Not included'}
+                    Kubernetes: ${formData.include_k8s ? 'Included' : 'Not included'}`;
+
+                        const successDiv = document.getElementById('successMessage');
+                        const configDiv = document.getElementById('generatedConfig');
+                        configDiv.innerHTML = `<pre>${summary.trim()}</pre>`;
+                        successDiv.style.display = 'block';
+                        successDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+                        setTimeout(() => {
+                            document.getElementById('templateForm').reset();
+                        }, 1000);
+                    }
+                </script>
+            </body>
+            </html>
+            EOFHTML
+            http-server ./public -p 7000
+        ports:
+        - containerPort: 7000
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 7000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 7000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backstage-service
+  labels:
+    app: backstage
+spec:
+  type: NodePort
+  ports:
+  - port: 7000
+    targetPort: 7000
+    nodePort: 30700
+    protocol: TCP
+    name: http
+  selector:
+    app: backstage

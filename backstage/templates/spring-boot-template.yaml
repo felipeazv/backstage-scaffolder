@@ -1,0 +1,99 @@
+apiVersion: backstage.io/v1beta2
+kind: Template
+metadata:
+  name: spring-boot-service
+  title: Spring Boot Service
+  description: Create a new Spring Boot microservice based on the hello-world template
+  tags:
+    - java
+    - spring-boot
+    - microservice
+spec:
+  owner: platform
+  type: service
+  parameters:
+    - title: Provide project information
+      required:
+        - component_id
+        - owner
+      properties:
+        component_id:
+          title: Name
+          type: string
+          description: Unique name of the component
+          ui:field: EntityNamePicker
+          ui:autofocus: true
+        description:
+          title: Description
+          type: string
+          description: Help others understand what this service does
+          default: A Spring Boot microservice
+        owner:
+          title: Owner
+          type: string
+          ui:field: OwnerPicker
+          ui:options:
+            allowArbitraryValues: false
+        port:
+          title: Server Port
+          type: number
+          description: Port on which the service will run
+          default: 8080
+          minimum: 1024
+          maximum: 65535
+    - title: Provide deployment information
+      required:
+        - java_version
+      properties:
+        java_version:
+          title: Java Version
+          type: string
+          description: Java version to use
+          enum:
+            - '11'
+            - '17'
+            - '21'
+          default: '21'
+        include_docker:
+          title: Include Docker support
+          type: boolean
+          default: true
+        include_k8s:
+          title: Include Kubernetes manifests
+          type: boolean
+          default: true
+  steps:
+    - id: fetch-base
+      name: Fetch base Spring Boot template
+      action: fetch:template
+      input:
+        url: ./spring-boot-base
+        targetPath: ./
+        values:
+          component_id: ${{ parameters.component_id }}
+          description: ${{ parameters.description }}
+          owner: ${{ parameters.owner }}
+          port: ${{ parameters.port }}
+          java_version: ${{ parameters.java_version }}
+          include_docker: ${{ parameters.include_docker }}
+          include_k8s: ${{ parameters.include_k8s }}
+    - id: publish
+      name: Publish to repository
+      action: publish:github
+      input:
+        allowedHosts: ['github.com']
+        description: This is ${{ parameters.component_id }}
+        repoUrl: github.com?owner=${{ parameters.owner }}&repo=${{ parameters.component_id }}
+    - id: register
+      name: Register in Backstage
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
+        catalogInfoPath: '/catalog-info.yaml'
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps.publish.output.repoUrl }}
+      - title: Open in catalog
+        icon: catalog
+        entityRef: ${{ steps.register.output.entityRef }}

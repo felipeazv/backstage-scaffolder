@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backstage
+  labels:
+    app: backstage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backstage
+  template:
+    metadata:
+      labels:
+        app: backstage
+    spec:
+      containers:
+      - name: backstage
+        image: node:18
+        command: ["/bin/sh"]
+        args:
+          - -c
+          - |
+            npm install -g http-server
+            mkdir -p /app/public
+            cd /app
+            cat > public/index.html <<'EOFHTML'
+$(cat /Users/felipeazevedo/Projects/backstage/backstage-mock.html)
+EOFHTML
+            http-server ./public -p 7000 --cors
+        ports:
+        - containerPort: 7000
+          name: http
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 7000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 7000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backstage-service
+  labels:
+    app: backstage
+spec:
+  type: NodePort
+  ports:
+  - port: 7000
+    targetPort: 7000
+    nodePort: 30700
+    protocol: TCP
+    name: http
+  selector:
+    app: backstage
