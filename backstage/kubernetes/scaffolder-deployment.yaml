@@ -1,5 +1,6 @@
 ---
-# Production Scaffolder Service Deployment
+# Scaffolder Service Deployment for Kubernetes Clusters
+# Suitable for dev, test, stage, and production environments
 # NOTE: This version removes Docker socket mounting for security
 # Images should be built via CI/CD pipeline instead
 apiVersion: apps/v1
@@ -10,7 +11,7 @@ metadata:
     app: scaffolder-service
     environment: production
 spec:
-  replicas: 2  # High availability
+  replicas: 2  # High availability - adjust per environment (1 for dev/test, 2+ for stage/prod)
   strategy:
     type: RollingUpdate
     rollingUpdate:

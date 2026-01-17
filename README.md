@@ -16,7 +16,7 @@ This project provides a complete developer platform that enables teams to:
 backstage-scaffolder/
 ├── backstage/
 │   ├── minikube/           # Local development deployment configs
-│   ├── production/         # Production-ready K8s manifests
+│   ├── kubernetes/         # Kubernetes manifests for all environments
 │   ├── backstage-app/      # Backstage application code
 │   └── templates/          # Service scaffolding templates
 ├── scaffolder-service/     # Custom scaffolding API
@@ -29,6 +29,12 @@ backstage-scaffolder/
 - **Backstage**: Developer portal UI (port 30700 in Minikube)
 - **Scaffolder Service**: REST API for project generation (port 30300 in Minikube)
 - **Deployment Configs**:
+  - `backstage/minikube/` - Local development with Minikube
+  - `backstage/kubernetes/` - K8s manifests for dev, test, stage, prod environments
+- **Sample Projects**: Reference implementations for scaffolding
+
+## Prerequisites
+
 ### For Local Development (Minikube)
 - Docker Desktop
 - Minikube installed and running
@@ -38,30 +44,26 @@ backstage-scaffolder/
 - Node.js 18+ (for Backstage development)
 - GitHub Personal Access Token (with `repo` and `delete_repo` scopes)
 
-### For Production Deployment
-See [`backstage/production/README.md`](backstage/production/README.md) for production prerequisites including:
-- Production Kubernetes cluster (GKE, EKS, AKS)
+### For Kubernetes Cluster Deployment
+See [`backstage/kubernetes/README.md`](backstage/kubernetes/README.md) for cluster deployment prerequisites including:
+- Kubernetes cluster (GKE, EKS, AKS, or self-managed)
 - Container registry (Docker Hub, GCR, ECR, ACR)
-- IDeployment Options
+- Ingress controller
+- Domain name and DNS configuration
+- TLS/SSL certificates (via cert-manager or cloud provider)
+
+## Deployment Options
 
 Choose your deployment environment:
 
 - **[Local Development (Minikube)](backstage/minikube/README.md)** - Fast local iteration, NodePort access, Docker socket mounting
-- **[Production Deployment](backstage/production/README.md)** - HA setup, Ingress, PVC, security hardened, CI/CD ready
+- **[Kubernetes Cluster Deployment](backstage/kubernetes/README.md)** - For dev, test, stage, prod - HA setup, Ingress, PVC, security hardened, CI/CD ready
 
 ---
 
 ## Quick Start (Minikube)
 
-For full Minikube setup instructions, see [`backstage/minikube/README.md`](backstage/minikube/README.md)roller
-- Domain name and DNS configuration
-- TLS/SSL certificates (via cert-manager or cloud provider
-- Docker Desktop
-- Minikube installed and running
-- kubectl CLI
-- Java 21+ (for local Spring Boot development)
-- Maven 3.6+
-- Node.js 18+ (for Backstage development)
+For full Minikube setup instructions, see [`backstage/minikube/README.md`](backstage/minikube/README.md)
 
 ## Quick Start
 

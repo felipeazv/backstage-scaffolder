@@ -1,5 +1,6 @@
 ---
-# Production Backstage Deployment
+# Backstage Deployment for Kubernetes Clusters
+# Suitable for dev, test, stage, and production environments
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,7 +9,7 @@ metadata:
     app: backstage
     environment: production
 spec:
-  replicas: 2  # High availability
+  replicas: 2  # High availability - adjust per environment (1 for dev/test, 2+ for stage/prod)
   strategy:
     type: RollingUpdate
     rollingUpdate:

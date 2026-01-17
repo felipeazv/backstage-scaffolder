@@ -1,12 +1,13 @@
 ---
 # PersistentVolumeClaim for scaffolder projects storage
 # This ensures data persists across pod restarts
+# Adjust size based on environment needs (smaller for dev/test, larger for prod)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: scaffolder-pvc
   labels:
-    app: scaffolder-service
+    app: scaffolder-service  # CHANGE THIS: dev, test, stage, prod
     environment: production
 spec:
   accessModes:

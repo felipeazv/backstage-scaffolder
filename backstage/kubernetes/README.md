@@ -1,11 +1,11 @@
-# Production Deployment Guide
+# Kubernetes Cluster Deployment Guide
 
-This directory contains production-ready Kubernetes manifests for deploying Backstage and the Scaffolder Service to a production Kubernetes cluster (GKE, EKS, AKS, etc.).
+This directory contains Kubernetes manifests for deploying Backstage and the Scaffolder Service to any Kubernetes cluster across different environments (development, test, staging, production).
 
 ## Key Differences from Minikube
 
-| Feature | Minikube | Production |
-|---------|----------|------------|
+| Feature | Minikube | Kubernetes Cluster |
+|---------|----------|-------------------|
 | **Image Source** | Local (`minikube image load`) | Container Registry (Docker Hub, GCR, ECR) |
 | **Service Type** | NodePort | ClusterIP + Ingress |
 | **Replicas** | 1 | 2+ (High Availability) |
@@ -14,15 +14,42 @@ This directory contains production-ready Kubernetes manifests for deploying Back
 | **Security** | Minimal | SecurityContext, NetworkPolicies |
 | **TLS/HTTPS** | No | Yes (via Ingress) |
 | **Monitoring** | kubectl logs | Prometheus, Grafana, Cloud Logging |
+| **Environments** | Local dev only | Dev, test, stage, prod |
 
 ## Prerequisites
-
-1. **Production Kubernetes cluster** (GKE, EKS, AKS, or self-managed)
+Kubernetes cluster** (GKE, EKS, AKS, or self-managed)
 2. **kubectl** configured to access your cluster
 3. **Container Registry** access (Docker Hub, GCR, ECR, ACR)
-4. **Domain name** for Ingress
+4. **Domain name** for Ingress (for prod/staging environments)
 5. **Ingress Controller** installed (nginx-ingress, or cloud provider)
 6. **cert-manager** (optional, for automatic TLS certificates)
+7. **GitHub Personal Access Token** with `repo` and `delete_repo` scopes
+
+## Environment-Specific Configuration
+
+These manifests can be deployed to different environments by adjusting:
+
+- **Namespace**: Create separate namespaces (`backstage-dev`, `backstage-test`, `backstage-stage`, `backstage-prod`)
+- **Replicas**: 1 for dev/test, 2+ for staging/production
+- **Resources**: Lower limits for dev/test, production-grade for prod
+- **Ingress domains**: Different domains per environment
+- **Storage size**: Smaller PVCs for dev/test
+
+### Example: Creating Environment-Specific Namespaces
+
+```bash
+# Development
+kubectl create namespace backstage-dev
+
+# Test
+kubectl create namespace backstage-test
+
+# Staging
+kubectl create namespace backstage-stage
+
+# Production
+kubectl create namespace backstage-prod
+```
 7. **GitHub Personal Access Token** with `repo` and `delete_repo` scopes
 
 ## Setup Steps
@@ -55,27 +82,29 @@ gcloud auth configure-docker
 
 # Build and push
 docker build -t gcr.io/YOUR_PROJECT_ID/scaffolder-service:v1.0.0 .
-docker push gcr.io/YOUR_PROJECT_ID/scaffolder-service:v1.0.0
-```
+docker push gcr.io/YOUR_PR
 
-**AWS ECR:**
+Create a dedicated namespace for your environment:
+
 ```bash
-# Login to ECR
-aws ecr get-login-password --region region | docker login --username AWS --password-stdin YOUR_ACCOUNT.dkr.ecr.region.amazonaws.com
-
-# Build and push
-docker build -t YOUR_ACCOUNT.dkr.ecr.region.amazonaws.com/scaffolder-service:v1.0.0 .
-docker push YOUR_ACCOUNT.dkr.ecr.region.amazonaws.com/scaffolder-service:v1.0.0
+# Choose your environment name (dev, test, stage, prod)
+export ENV=prod
+kubectl create namespace backstage-${ENV}
+kubectl config set-context --current --namespace=backstage-${ENV}
 ```
 
-### 2. Update Image References
-
+Update the namespace in `scaffolder-deployment.yaml` ClusterRoleBinding:
+```yaml
+subjects:
+- kind: ServiceAccount
+  name: scaffolder-deployer
+  namespace: backstage-prod  # Change to your namespace
 Edit the deployment files and replace `YOUR_REGISTRY` with your actual registry:
 
 ```bash
 # In production/scaffolder-deployment.yaml
 # Change: image: YOUR_REGISTRY/scaffolder-service:latest
-# To: image: docker.io/yourorg/scaffolder-service:v1.0.0
+# To: image: do${ENV}.io/yourorg/scaffolder-service:v1.0.0
 
 # In production/backstage-deployment.yaml
 # Change: image: YOUR_REGISTRY/backstage:latest
@@ -88,7 +117,7 @@ Create a dedicated namespace for production:
 
 ```bash
 kubectl create namespace backstage-prod
-kubectl config set-context --current --namespace=backstage-prod
+kubectl config ${ENV}context --current --namespace=backstage-prod
 ```
 
 Update the namespace in `scaffolder-deployment.yaml` ClusterRoleBinding:
@@ -97,9 +126,11 @@ subjects:
 - kind: ServiceAccount
   name: scaffolder-deployer
   namespace: backstage-prod  # Change from 'default'
-```
-
-### 4. Create GitHub Token Secret
+``` based on environment:
+# Dev: backstage-dev.yourdomain.com
+# Test: backstage-test.yourdomain.com
+# Stage: backstage-stage.yourdomain.com
+# Prod: backstage.yourdomain
 
 ```bash
 kubectl create secret generic github-token \
@@ -107,7 +138,7 @@ kubectl create secret generic github-token \
   -n backstage-prod
 ```
 
-### 5. (Optional) Create Registry Credentials
+### 5. (Optional) Create Registry${ENV}dentials
 
 If using a private container registry:
 
@@ -148,32 +179,32 @@ Create DNS A/CNAME records pointing to the LoadBalancer IP/hostname.
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
 ```
-
-**Or for specific cloud providers, follow their documentation:**
-- GKE: https://cloud.google.com/kubernetes-engine/docs/how-to/load-balance-ingress
-- EKS: https://docs.aws.amazon.com/eks/latest/userguide/alb-ingress.html
-- AKS: https://learn.microsoft.com/en-us/azure/aks/ingress-basic
-
-### 8. (Optional) Install cert-manager for TLS
+Kubernetes Cluster
 
 ```bash
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
-```
+# Apply in order:
+kubectl apply -f persistent-volume-claim.yaml
+kubectl apply -f scaffolder-deployment.yaml
+kubectl apply -f backstage-deployment.yaml
+kubectl apply -f ingress.yaml
 
-Create a ClusterIssuer for Let's Encrypt:
+# Check deployment status
+kubectl get pods -n backstage-${ENV}
+kubectl get svc -n backstage-${ENV}
+kubectl get ingress -n backstage-${ENV}ypt:
 ```yaml
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
   name: letsencrypt-prod
 spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: your-email@example.com
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-    - http01:
+  acme:${ENV}
+
+# Check logs
+kubectl logs -l app=backstage -n backstage-${ENV}
+kubectl logs -l app=scaffolder-service -n backstage-${ENV}
+
+# Test endpoints (adjust domain for your environment)
         ingress:
           class: nginx
 ```
@@ -181,7 +212,7 @@ spec:
 ### 9. Deploy to Production
 
 ```bash
-# Apply in order:
+# Ase manifests do NOT mount `/var/run/docker.sock`. This is a critical security requirement for any non-local environ
 kubectl apply -f persistent-volume-claim.yaml
 kubectl apply -f scaffolder-deployment.yaml
 kubectl apply -f backstage-deployment.yaml
@@ -209,7 +240,7 @@ curl https://api.backstage.yourdomain.com/health
 ```
 
 ## Important Security Notes
-
+cluster environments
 ### ⚠️ Docker Socket Removed
 The production deployment does NOT mount `/var/run/docker.sock`. This is a critical security requirement.
 
@@ -237,9 +268,13 @@ jobs:
       run: docker push yourorg/service:${{ github.sha }}
     - name: Deploy to Kubernetes
       run: kubectl set image deployment/service service=yourorg/service:${{ github.sha }}
-```
-
-### 🔒 Additional Security Recommendations
+```** (adjust based on environment):
+   ```bash
+   # Restricted for production
+   kubectl label namespace backstage-prod pod-security.kubernetes.io/enforce=restricted
+   
+   # Baseline for dev/test
+   kubectl label namespace backstage-dev pod-security.kubernetes.io/enforce=baseline
 
 1. **Enable Pod Security Standards:**
    ```bash
@@ -283,10 +318,10 @@ spec:
       target:
         type: Utilization
         averageUtilization: 70
-```
-
-### Vertical Pod Autoscaling
-
+```** (critical for production):
+```bash
+# Use cloud provider snapshots or Velero
+velero backup create backstage-backup --include-namespaces backstage-${ENV}
 Consider using VPA for automatic resource adjustment.
 
 ## Backup and Disaster Recovery
