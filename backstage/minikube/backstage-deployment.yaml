@@ -16,10 +16,10 @@ metadata:
 rules:
 - apiGroups: ["apps"]
   resources: ["deployments"]
-  verbs: ["create", "update", "get", "list", "watch"]
+  verbs: ["create", "update", "get", "list", "watch", "delete"]
 - apiGroups: [""]
   resources: ["services", "pods"]
-  verbs: ["create", "update", "get", "list", "watch"]
+  verbs: ["create", "update", "get", "list", "watch", "delete"]
 - apiGroups: [""]
   resources: ["pods/log"]
   verbs: ["get", "list"]
