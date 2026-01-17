@@ -44,7 +44,35 @@ backstage-scaffolder/
 minikube start
 ```
 
-### 2. Access Minikube Dashboard (Optional)
+### 2. Deploy Backstage and Scaffolder Services
+
+Deploy the complete stack to Minikube:
+
+```bash
+cd backstage
+kubectl apply -f minikube-deployment-final.yaml
+```
+
+Wait for pods to be ready (this may take a few minutes):
+
+```bash
+kubectl get pods -w
+```
+
+Press `Ctrl+C` once you see both pods are `Running` and `READY 1/1`.
+
+Verify deployments:
+
+```bash
+kubectl get deployments
+kubectl get services
+```
+
+You should see:
+- `backstage` deployment and `backstage-service` (NodePort 30700)
+- `scaffolder-service` deployment and service (NodePort 30300)
+
+### 3. Access Minikube Dashboard (Optional)
 
 ```bash
 minikube dashboard
@@ -56,7 +84,7 @@ Or get the URL without opening the browser:
 minikube dashboard --url
 ```
 
-### 3. Set Up Port Forwards
+### 4. Set Up Port Forwards
 
 Run these commands in separate terminals to access the services:
 
@@ -70,7 +98,7 @@ kubectl port-forward svc/backstage-service 30700:7000 --address=127.0.0.1
 kubectl port-forward svc/scaffolder-service 30300:3000 --address=127.0.0.1
 ```
 
-### 4. Access Backstage
+### 5. Access Backstage
 
 Open your browser to:
 ```
@@ -130,6 +158,25 @@ kubectl delete service <name>-service
 Or delete by label:
 ```bash
 kubectl delete deployment,service -l app=<name>
+```
+
+## Cleaning Up
+
+To completely remove Backstage and Scaffolder from Minikube:
+
+```bash
+cd backstage
+kubectl delete -f minikube-deployment-final.yaml
+```
+
+Or delete specific resources:
+
+```bash
+kubectl delete deployment backstage scaffolder-service
+kubectl delete service backstage-service scaffolder-service
+kubectl delete serviceaccount scaffolder-deployer
+kubectl delete clusterrolebinding scaffolder-deployer
+kubectl delete clusterrole scaffolder-deployer
 ```
 
 ## Project Naming & Validation
