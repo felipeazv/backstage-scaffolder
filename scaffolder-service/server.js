@@ -804,6 +804,29 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
       }
     }
 
+    // If there's a Dockerfile, attempt to build the image so the cluster can pull it
+    try {
+      const dockerfilePath = path.join(projectDir, 'Dockerfile');
+      if (fs.existsSync(dockerfilePath)) {
+        sendEvent({ log: 'Dockerfile found — building image locally...' });
+        try {
+          // Build image using host docker (socket must be mounted)
+          const buildCmd = `docker build -t ${serviceName}:latest "${projectDir}"`;
+          sendEvent({ log: `Running: ${buildCmd}` });
+          const buildOutput = execSync(buildCmd, { encoding: 'utf8', stdio: 'pipe' });
+          sendEvent({ log: buildOutput });
+          sendEvent({ log: `Docker image ${serviceName}:latest built successfully` });
+        } catch (err) {
+          sendEvent({ log: `Docker build failed: ${err.message}` });
+          // continue — image might be available in registry
+        }
+      } else {
+        sendEvent({ log: 'No Dockerfile present — skipping image build' });
+      }
+    } catch (err) {
+      sendEvent({ log: `Error while checking/building Dockerfile: ${err.message}` });
+    }
+
     // Apply deployment
     sendEvent({ log: 'Applying Kubernetes deployment...' });
     try {
