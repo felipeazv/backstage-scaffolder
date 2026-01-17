@@ -27,14 +27,28 @@ docker build -t backstage:latest .
 minikube image load backstage:latest
 ```
 
-### 4. Deploy to Minikube
+### 4. Configure GitHub Owner
+
+Edit `backstage/minikube/scaffolder-deployment.yaml` and set your GitHub username:
+```yaml
+- name: GITHUB_OWNER
+  value: "YOUR_GITHUB_USERNAME"  # Change to your actual GitHub username
+```
+
+Or use sed to update it:
+```bash
+cd ../..
+sed -i '' 's/YOUR_GITHUB_USERNAME/your-actual-username/g' backstage/minikube/scaffolder-deployment.yaml
+```
+
+### 5. Deploy to Minikube
 ```bash
 cd ../..
 kubectl apply -f backstage/minikube/backstage-deployment.yaml
 kubectl apply -f backstage/minikube/scaffolder-deployment.yaml
 ```
 
-### 5. Access Services
+### 6. Access Services
 
 **Option A: Port Forwarding (Recommended)**
 ```bash

@@ -97,6 +97,14 @@ To enable automatic GitHub repository creation:
    kubectl create secret generic github-token --from-literal=token=ghp_YourActualTokenHere
    ```
 
+3. Configure GitHub owner in deployment file:
+   
+   Edit `backstage/minikube/scaffolder-deployment.yaml` and set your GitHub username:
+   ```yaml
+   - name: GITHUB_OWNER
+     value: "your-github-username"  # Change to your actual GitHub username
+   ```
+
    **Note**: If you need to update the token later:
 kubectl apply -f backstage/minikube/backstage-deployment.yaml
 kubectl apply -f backstage/minikube/ secret generic github-token --from-literal=token=YOUR_NEW_TOKEN
