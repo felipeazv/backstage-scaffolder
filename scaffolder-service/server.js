@@ -16,6 +16,17 @@ const PROJECTS_DIR = '/projects/scaffolded-projects';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_OWNER = process.env.GITHUB_OWNER || 'felipeazv';
 
+// Namespace safety
+const FORBIDDEN_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease']);
+
+function validateNamespace(ns) {
+  if (!ns) return false;
+  // Kubernetes namespace regex (DNS-1123)
+  if (!/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(ns)) return false;
+  if (FORBIDDEN_NAMESPACES.has(ns)) return false;
+  return true;
+}
+
 // Ensure projects directory exists
 if (!fs.existsSync(PROJECTS_DIR)) {
   fs.mkdirSync(PROJECTS_DIR, { recursive: true });
@@ -119,7 +130,8 @@ app.post('/api/scaffold', async (req, res) => {
       port,
       java_version,
       include_docker,
-      include_k8s
+      include_k8s,
+      target_namespace
     } = req.body;
 
     // Use user description or default
@@ -196,12 +208,16 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Generate K8s manifests
     if (include_k8s) {
-      const deployment = generateK8sDeployment(component_id, owner, port);
+      const deployment = generateK8sDeployment(component_id, owner, port, target_namespace);
       fs.writeFileSync(path.join(k8sDir, 'deployment.yaml'), deployment);
 
-      const service = generateK8sService(component_id, port);
+      const service = generateK8sService(component_id, port, target_namespace);
       fs.writeFileSync(path.join(k8sDir, 'service.yaml'), service);
     }
+
+    // Persist scaffold metadata (namespace and other options)
+    const meta = { namespace: target_namespace || null };
+    fs.writeFileSync(path.join(projectDir, 'scaffold-metadata.json'), JSON.stringify(meta, null, 2));
 
     // Generate catalog-info.yaml
     const catalogInfo = generateCatalogInfo(component_id, owner, description);
@@ -457,12 +473,14 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 `;
 }
 
-function generateK8sDeployment(serviceName, owner, port) {
+function generateK8sDeployment(serviceName, owner, port, namespace) {
+  const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  const templateNsBlock = '';
   return `apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ${serviceName}
-  labels:
+${nsBlock}  labels:
     app: ${serviceName}
     owner: ${owner}
 spec:
@@ -507,12 +525,13 @@ spec:
 `;
 }
 
-function generateK8sService(serviceName, port) {
+function generateK8sService(serviceName, port, namespace) {
+  const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
   return `apiVersion: v1
 kind: Service
 metadata:
   name: ${serviceName}-service
-  labels:
+${nsBlock}  labels:
     app: ${serviceName}
 spec:
   type: NodePort
@@ -723,10 +742,35 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
       return res.end();
     }
     
+    // Read scaffold metadata for namespace
+    let namespace = null;
+    try {
+      const metaPath = path.join(projectDir, 'scaffold-metadata.json');
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        namespace = meta && meta.namespace ? meta.namespace : null;
+      }
+    } catch (err) {
+      // ignore
+    }
+
+    // If namespace is provided, create it idempotently
+    if (namespace) {
+      sendEvent({ log: `Ensuring namespace '${namespace}' exists...` });
+      try {
+        execSync(`kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -`, { stdio: 'pipe' });
+        sendEvent({ log: `Namespace ${namespace} ensured` });
+      } catch (err) {
+        sendEvent({ error: `Failed to ensure namespace ${namespace}: ${err.message}` });
+        return res.end();
+      }
+    }
+
     // Apply deployment
     sendEvent({ log: 'Applying Kubernetes deployment...' });
     try {
-      const deployOutput = execSync(`kubectl apply -f "${path.join(k8sDir, 'deployment.yaml')}"`, { encoding: 'utf8' });
+      const nsArg = namespace ? `-n ${namespace}` : '';
+      const deployOutput = execSync(`kubectl apply ${nsArg} -f "${path.join(k8sDir, 'deployment.yaml')}"`, { encoding: 'utf8' });
       sendEvent({ log: deployOutput.trim() });
     } catch (error) {
       sendEvent({ error: `Deployment failed: ${error.message}` });
@@ -736,7 +780,8 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
     // Apply service
     sendEvent({ log: 'Applying Kubernetes service...' });
     try {
-      const svcOutput = execSync(`kubectl apply -f "${path.join(k8sDir, 'service.yaml')}"`, { encoding: 'utf8' });
+      const nsArg = namespace ? `-n ${namespace}` : '';
+      const svcOutput = execSync(`kubectl apply ${nsArg} -f "${path.join(k8sDir, 'service.yaml')}"`, { encoding: 'utf8' });
       sendEvent({ log: svcOutput.trim() });
     } catch (error) {
       sendEvent({ error: `Service creation failed: ${error.message}` });
@@ -750,7 +795,8 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
     
     while (attempts < maxAttempts) {
       try {
-        const podStatus = execSync(`kubectl get pods -l app=${serviceName} -o jsonpath='{.items[0].status.phase}'`, { encoding: 'utf8' });
+        const nsArg = namespace ? `-n ${namespace}` : '';
+        const podStatus = execSync(`kubectl get pods ${nsArg} -l app=${serviceName} -o jsonpath='{.items[0].status.phase}'`, { encoding: 'utf8' });
         sendEvent({ log: `Pod status: ${podStatus}` });
         
         if (podStatus.includes('Running')) {
@@ -775,7 +821,8 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
     // Get pod logs
     sendEvent({ log: '\n--- Pod Logs ---' });
     try {
-      const logs = execSync(`kubectl logs -l app=${serviceName} --tail=50`, { encoding: 'utf8' });
+      const nsArg = namespace ? `-n ${namespace}` : '';
+      const logs = execSync(`kubectl logs ${nsArg} -l app=${serviceName} --tail=50`, { encoding: 'utf8' });
       sendEvent({ log: logs });
     } catch (error) {
       sendEvent({ log: 'Could not retrieve logs yet' });
@@ -826,22 +873,24 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       }
     }
     
-    // Delete Kubernetes deployment
+    // Delete Kubernetes resources (respect namespace if present)
     try {
-      await execAsync(`kubectl delete deployment ${serviceName} --ignore-not-found=true`);
+      let nsArg = '';
+      const metaPath = path.join(PROJECTS_DIR, serviceName, 'scaffold-metadata.json');
+      if (fs.existsSync(metaPath)) {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        if (meta && meta.namespace) nsArg = `-n ${meta.namespace}`;
+      }
+
+      await execAsync(`kubectl delete deployment ${serviceName} ${nsArg} --ignore-not-found=true`);
       results.kubernetes.deployment = true;
-      console.log(`[CLEANUP] Deleted K8s deployment: ${serviceName}`);
+      console.log(`[CLEANUP] Deleted K8s deployment: ${serviceName} ${nsArg}`);
+
+      await execAsync(`kubectl delete service ${serviceName}-service ${nsArg} --ignore-not-found=true`);
+      results.kubernetes.service = true;
+      console.log(`[CLEANUP] Deleted K8s service: ${serviceName}-service ${nsArg}`);
     } catch (error) {
       results.kubernetes.error = error.message;
-    }
-    
-    // Delete Kubernetes service
-    try {
-      await execAsync(`kubectl delete service ${serviceName}-service --ignore-not-found=true`);
-      results.kubernetes.service = true;
-      console.log(`[CLEANUP] Deleted K8s service: ${serviceName}-service`);
-    } catch (error) {
-      if (!results.kubernetes.error) results.kubernetes.error = error.message;
     }
     
     // Delete local storage
@@ -901,12 +950,19 @@ app.delete('/api/cleanup-all', async (req, res) => {
           }
         }
         
-        // Delete Kubernetes resources
+        // Delete Kubernetes resources (respect namespace if present)
         try {
-          await execAsync(`kubectl delete deployment ${serviceName} --ignore-not-found=true`);
-          await execAsync(`kubectl delete service ${serviceName}-service --ignore-not-found=true`);
+          let nsArg = '';
+          const metaPath = path.join(PROJECTS_DIR, serviceName, 'scaffold-metadata.json');
+          if (fs.existsSync(metaPath)) {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            if (meta && meta.namespace) nsArg = `-n ${meta.namespace}`;
+          }
+
+          await execAsync(`kubectl delete deployment ${serviceName} ${nsArg} --ignore-not-found=true`);
+          await execAsync(`kubectl delete service ${serviceName}-service ${nsArg} --ignore-not-found=true`);
           results.kubernetes.deleted.push(serviceName);
-          console.log(`[CLEANUP-ALL] Deleted K8s resources: ${serviceName}`);
+          console.log(`[CLEANUP-ALL] Deleted K8s resources: ${serviceName} ${nsArg}`);
         } catch (error) {
           results.kubernetes.errors.push({ service: serviceName, error: error.message });
         }

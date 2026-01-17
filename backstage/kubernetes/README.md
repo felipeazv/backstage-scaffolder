@@ -398,6 +398,22 @@ kubectl run -it --rm debug --image=busybox --restart=Never -- wget -O- http://sc
 - Configure monitoring and alerting
 - Implement backup strategies
 - Set up disaster recovery procedures
+
+## Scaffolder: Namespace selection
+
+The Scaffolder supports selecting a Kubernetes namespace when scaffolding and deploying a service. Key points:
+
+- The Backstage template exposes a `target_namespace` field that the user can set during scaffold.
+- The scaffolder stores the chosen namespace in `scaffold-metadata.json` inside the generated project.
+- During deployment the scaffolder will ensure the namespace exists (idempotent create) and apply manifests into that namespace.
+- The scaffolder will refuse obvious system namespaces (for safety) and will not automatically modify cluster-wide resources without RBAC.
+
+RBAC notes:
+
+- If you want the scaffolder to create namespaces, the scaffolder ServiceAccount must be permitted to `create` and `apply` namespaces.
+- The scaffolder also needs permissions to create/update/delete resources in the target namespace (Role/RoleBinding or ClusterRoleBinding). Prefer granting namespace-scoped Roles for least privilege.
+
+If you prefer not to allow namespace creation, instruct users to create the namespace beforehand and set it in the template form.
 - Configure authentication (OAuth, SAML)
 - Enable audit logging
 - Implement rate limiting and API quotas

@@ -62,6 +62,11 @@ spec:
           title: Include Kubernetes manifests
           type: boolean
           default: true
+        target_namespace:
+          title: Target Kubernetes Namespace
+          type: string
+          description: Namespace to deploy the service to. Leave empty to use the cluster/default namespace.
+          default: ""
   steps:
     - id: fetch-base
       name: Fetch Base Template  
@@ -74,6 +79,7 @@ spec:
           owner: ${{ parameters.owner }}
           port: ${{ parameters.port }}
           java_version: ${{ parameters.java_version }}
+          target_namespace: ${{ parameters.target_namespace }}
     
     - id: publish
       name: Publish to GitHub
