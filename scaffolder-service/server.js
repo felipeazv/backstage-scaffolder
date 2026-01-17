@@ -178,6 +178,26 @@ app.post('/api/scaffold', async (req, res) => {
       fs.mkdirSync(dir, { recursive: true });
     });
 
+    // Persist initial scaffold metadata early so deploy can read namespace even
+    // if later steps fail. Validate namespace here.
+    const initialMeta = { namespace: null };
+    if (target_namespace && target_namespace.trim() !== '') {
+      if (!validateNamespace(target_namespace)) {
+        return res.status(400).json({ error: `Invalid or forbidden namespace: ${target_namespace}` });
+      }
+      initialMeta.namespace = target_namespace;
+    }
+    try {
+      const metaPath = path.join(projectDir, 'scaffold-metadata.json');
+      fs.writeFileSync(metaPath, JSON.stringify(initialMeta, null, 2));
+      const fdInit = fs.openSync(metaPath, 'r');
+      fs.fsyncSync(fdInit);
+      fs.closeSync(fdInit);
+      console.log(`[SCAFFOLD] Wrote initial scaffold metadata to ${metaPath}: ${JSON.stringify(initialMeta)}`);
+    } catch (err) {
+      console.error('[SCAFFOLD] Failed to write initial scaffold-metadata.json:', err.message);
+    }
+
     // Generate pom.xml
     const pomXml = generatePomXml(component_id, packageName, java_version);
     fs.writeFileSync(path.join(projectDir, 'pom.xml'), pomXml);
