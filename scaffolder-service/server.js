@@ -803,8 +803,16 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
           execSync(`kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -`, { stdio: 'pipe' });
           sendEvent({ log: `Namespace ${namespace} ensured` });
         } catch (err) {
-          sendEvent({ error: `Failed to ensure namespace ${namespace}: ${err.message}` });
-          return res.end();
+          // If we lack RBAC to check/create namespaces, warn and continue —
+          // the namespace may already exist (or the cluster admin can create
+          // it). Don't abort deployment on Forbidden errors.
+          const msg = err && err.message ? err.message : String(err);
+          if (msg.includes('Forbidden') || msg.includes('cannot get resource') ) {
+            sendEvent({ log: `Namespace ensure skipped due to RBAC: ${msg}` });
+          } else {
+            sendEvent({ error: `Failed to ensure namespace ${namespace}: ${msg}` });
+            return res.end();
+          }
         }
       } else {
         sendEvent({ log: `Skipping namespace creation for '${namespace}' (ALLOW_NAMESPACE_CREATION not set). Ensure namespace exists manually.` });
