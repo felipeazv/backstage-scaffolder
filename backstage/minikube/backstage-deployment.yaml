@@ -60,7 +60,7 @@ spec:
       serviceAccountName: scaffolder-deployer
       containers:
       - name: scaffolder-service
-        image: scaffolder-service:v3
+        image: scaffolder-service:v4
         imagePullPolicy: IfNotPresent
         env:
         - name: GITHUB_TOKEN

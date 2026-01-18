@@ -525,7 +525,7 @@ spec:
     spec:
       containers:
       - name: ${serviceName}
-        image: ${serviceName}:0
+        image: ${serviceName}:v1
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: ${port}
@@ -817,11 +817,11 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
         sendEvent({ log: 'Dockerfile found — building image locally...' });
         try {
           // Build image using host docker (socket must be mounted)
-          const buildCmd = `docker build -t ${serviceName}:latest "${projectDir}"`;
+          const buildCmd = `docker build -t ${serviceName}:v1 "${projectDir}"`;
           sendEvent({ log: `Running: ${buildCmd}` });
           const buildOutput = execSync(buildCmd, { encoding: 'utf8', stdio: 'pipe' });
           sendEvent({ log: buildOutput });
-          sendEvent({ log: `Docker image ${serviceName}:latest built successfully` });
+          sendEvent({ log: `Docker image ${serviceName}:v1 built successfully` });
         } catch (err) {
           sendEvent({ log: `Docker build failed: ${err.message}` });
           // continue — image might be available in registry
