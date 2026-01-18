@@ -321,6 +321,9 @@ app.post('/api/scaffold', async (req, res) => {
 // Template generators
 
 function generatePomXml(serviceName, packageName, javaVersion) {
+  // Spring Boot 3.x requires Java 17+, use 2.7.x for Java 11
+  const springBootVersion = javaVersion === '11' ? '2.7.18' : '3.2.1';
+  
   return `<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -339,7 +342,7 @@ function generatePomXml(serviceName, packageName, javaVersion) {
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.1</version>
+        <version>${springBootVersion}</version>
         <relativePath/>
     </parent>
 
@@ -485,6 +488,9 @@ function generateDockerfile(serviceName, javaVersion) {
                     javaVersion === '17' ? 'maven:3.9-eclipse-temurin-17' :
                     'maven:3.9-eclipse-temurin-21';
   
+  // Use standard runtime images for better cross-platform compatibility
+  const runtimeImage = `eclipse-temurin:${javaVersion}-jre`;
+  
   return `# Build stage
 FROM ${baseImage} AS builder
 WORKDIR /build
@@ -492,11 +498,15 @@ COPY . .
 RUN mvn clean package -DskipTests
 
 # Runtime stage
-FROM eclipse-temurin:${javaVersion}-jre-alpine
+FROM ${runtimeImage}
 WORKDIR /app
 COPY --from=builder /build/target/*.jar app.jar
-RUN adduser -D -u 1000 spring && chown -R spring:spring /app
-USER spring
+
+# Create spring user (handle existing user gracefully)
+RUN (adduser -D -u 1001 spring 2>/dev/null || useradd -r -u 1001 spring 2>/dev/null || true) && \\
+    chown -R $(id -u spring):$(id -g spring) /app 2>/dev/null || chown -R 1001:1001 /app
+
+USER 1001
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 `;
