@@ -525,7 +525,7 @@ spec:
     spec:
       containers:
       - name: ${serviceName}
-        image: ${serviceName}:latest
+        image: ${serviceName}:0
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: ${port}

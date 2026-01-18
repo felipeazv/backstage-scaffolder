@@ -60,7 +60,7 @@ spec:
       serviceAccountName: scaffolder-deployer
       containers:
       - name: scaffolder-service
-        image: scaffolder-service:latest
+        image: scaffolder-service:v3
         imagePullPolicy: IfNotPresent
         env:
         - name: GITHUB_TOKEN
@@ -144,7 +144,7 @@ spec:
     spec:
       containers:
       - name: backstage
-        image: backstage-frontend:v9
+        image: backstage-frontend:v10
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 7000
