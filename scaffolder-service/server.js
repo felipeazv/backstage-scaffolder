@@ -293,16 +293,16 @@ app.post('/api/scaffold', async (req, res) => {
         `git clone ${githubRepoUrl}`,
         `cd ${component_id}`,
         'mvn clean package',
-        'docker build -t ' + component_id + ':latest .',
-        'minikube image load ' + component_id + ':latest',
+        'docker build -t ' + component_id + ':v1 .',
+        'minikube image load ' + component_id + ':v1',
         'kubectl apply -f k8s/deployment.yaml',
         'kubectl apply -f k8s/service.yaml',
         `kubectl port-forward svc/${component_id}-service ${port}:${port}`
       ] : [
         `cd ${projectDir}`,
         'mvn clean package',
-        'docker build -t ' + component_id + ':latest .',
-        'minikube image load ' + component_id + ':latest',
+        'docker build -t ' + component_id + ':v1 .',
+        'minikube image load ' + component_id + ':v1',
         'kubectl apply -f k8s/deployment.yaml',
         'kubectl apply -f k8s/service.yaml',
         `kubectl port-forward svc/${component_id}-service ${port}:${port}`
@@ -481,9 +481,9 @@ public class ${className} {
 }
 
 function generateDockerfile(serviceName, javaVersion) {
-  const baseImage = javaVersion === '11' ? 'maven:3.9.2-eclipse-temurin-11' : 
-                    javaVersion === '17' ? 'maven:3.9.2-eclipse-temurin-17' :
-                    'maven:3.9.2-eclipse-temurin-21';
+  const baseImage = javaVersion === '11' ? 'maven:3.9-eclipse-temurin-11' : 
+                    javaVersion === '17' ? 'maven:3.9-eclipse-temurin-17' :
+                    'maven:3.9-eclipse-temurin-21';
   
   return `# Build stage
 FROM ${baseImage} AS builder
@@ -630,15 +630,15 @@ Service will be available at \`http://localhost:${port}\`
 ## Docker
 
 \`\`\`bash
-docker build -t ${serviceName}:latest .
-docker run -p ${port}:${port} ${serviceName}:latest
+docker build -t ${serviceName}:v1 .
+docker run -p ${port}:${port} ${serviceName}:v1
 \`\`\`
 
 ## Kubernetes Deployment
 
 \`\`\`bash
 # Load image to minikube
-minikube image load ${serviceName}:latest
+minikube image load ${serviceName}:v1
 
 # Deploy
 kubectl apply -f k8s/deployment.yaml
@@ -822,8 +822,16 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
           const buildOutput = execSync(buildCmd, { encoding: 'utf8', stdio: 'pipe' });
           sendEvent({ log: buildOutput });
           sendEvent({ log: `Docker image ${serviceName}:v1 built successfully` });
+
+          // Load image into Minikube so it's available for deployment
+          sendEvent({ log: `Loading image into Minikube...` });
+          const loadCmd = `minikube image load ${serviceName}:v1`;
+          sendEvent({ log: `Running: ${loadCmd}` });
+          const loadOutput = execSync(loadCmd, { encoding: 'utf8', stdio: 'pipe' });
+          sendEvent({ log: loadOutput });
+          sendEvent({ log: `Image ${serviceName}:v1 loaded into Minikube successfully` });
         } catch (err) {
-          sendEvent({ log: `Docker build failed: ${err.message}` });
+          sendEvent({ log: `Docker build or image load failed: ${err.message}` });
           // continue — image might be available in registry
         }
       } else {
