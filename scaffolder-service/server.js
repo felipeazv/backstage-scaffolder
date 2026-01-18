@@ -526,7 +526,7 @@ spec:
       containers:
       - name: ${serviceName}
         image: ${serviceName}:v1
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Never
         ports:
         - containerPort: ${port}
           name: http
