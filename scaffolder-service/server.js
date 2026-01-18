@@ -253,7 +253,7 @@ app.post('/api/scaffold', async (req, res) => {
     fs.writeFileSync(path.join(projectDir, 'catalog-info.yaml'), catalogInfo);
 
     // Generate README
-    const readme = generateReadme(component_id, description, port);
+    const readme = generateReadme(component_id, description, port, java_version);
     fs.writeFileSync(path.join(projectDir, 'README.md'), readme);
 
     // Generate .gitignore
@@ -603,8 +603,17 @@ spec:
 `;
 }
 
-function generateReadme(serviceName, description, port) {
+function generateReadme(serviceName, description, port, java_version) {
   const displayName = serviceName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  
+  // Determine Spring Boot version based on Java version
+  let springBootVersion;
+  if (java_version === '11') {
+    springBootVersion = '2.7+';
+  } else {
+    springBootVersion = '3.2+';
+  }
+  
   return `# ${displayName}
 
 ${description}
@@ -612,7 +621,7 @@ ${description}
 ## Development
 
 ### Prerequisites
-- Java 21+
+- Java ${java_version}+
 - Maven 3.9+
 - Docker (optional)
 - Kubernetes/minikube (optional)
@@ -662,8 +671,8 @@ Access at \`http://localhost:${port}\`
 
 ## Architecture
 
-- **Framework**: Spring Boot 3.2+
-- **Language**: Java
+- **Framework**: Spring Boot ${springBootVersion}
+- **Language**: Java ${java_version}
 - **Containerization**: Docker
 - **Orchestration**: Kubernetes
 

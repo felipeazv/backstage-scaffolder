@@ -19,8 +19,8 @@ spec:
       serviceAccountName: scaffolder-deployer
       containers:
       - name: scaffolder-service
-        image: scaffolder-service:v12
-        imagePullPolicy: IfNotPresent
+        image: scaffolder-service:v13
+        imagePullPolicy: Never
         env:
         - name: GITHUB_TOKEN
           valueFrom:
