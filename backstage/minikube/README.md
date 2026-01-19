@@ -47,21 +47,33 @@ kubectl apply -f config.yaml
 ```
 
 ### 5. Deploy to Minikube
+
+The deployment creates two namespaces:
+- `backstage`: Platform services (Backstage UI + Scaffolder)  
+- `development`: Generated microservices
+
 ```bash
 cd ../..
 kubectl apply -f backstage/minikube/backstage-deployment.yaml
-kubectl apply -f backstage/minikube/scaffolder-deployment.yaml
 ```
 
+This single command will:
+- Create `backstage` and `development` namespaces
+- Deploy Backstage UI and Scaffolder service to `backstage` namespace
+- Set up cross-namespace RBAC for scaffolder to deploy to `development`
+- Configure all necessary services and secrets
+
 ### 6. Access Services
+
+The platform services run in the `backstage` namespace:
 
 **Option A: Port Forwarding (Recommended)**
 ```bash
 # Backstage UI
-kubectl port-forward svc/backstage-service 30700:7000
+kubectl port-forward -n backstage svc/backstage-service 30700:7000
 
-# Scaffolder API
-kubectl port-forward svc/scaffolder-service 30300:3000
+# Scaffolder API  
+kubectl port-forward -n backstage svc/scaffolder-service 30300:3000
 ```
 
 Then access:
@@ -70,14 +82,26 @@ Then access:
 
 **Option B: Minikube Service URLs**
 ```bash
-minikube service backstage-service --url
-minikube service scaffolder-service --url
+minikube service backstage-service --url -n backstage
+minikube service scaffolder-service --url -n scaffolder
 ```
 
 **Option C: Minikube Tunnel (for direct NodePort access)**
 ```bash
 minikube tunnel
 # Then access http://localhost:30700 and http://localhost:30300
+```
+
+### 7. Verify Generated Services
+
+Generated services deploy to the `development` namespace:
+
+```bash
+# List all services in development namespace
+kubectl get all -n development
+
+# View service logs (replace <service-name> with actual service)
+kubectl logs -n development deployment/<service-name>
 ```
 
 ## Development Features
@@ -160,17 +184,52 @@ minikube image load scaffolder-service:latest
 kubectl rollout restart deployment/scaffolder-service
 
 # 5. Watch restart
-kubectl get pods -w
+kubectl get pods -w -n backstage
+```
+
+## Namespace Benefits
+
+### Service Isolation
+- **Platform services** (`backstage` namespace) are isolated from **application services** (`development`)
+- Prevents accidental interference between platform and generated services
+- Clean separation of concerns for RBAC and resource management
+
+### Simplified Operations
+- All generated services consistently deploy to `development` namespace
+- Easy to manage, monitor, and clean up generated services
+- Clear service discovery within namespace boundaries
+
+### Security
+- Scaffolder service runs with minimal permissions
+- Cross-namespace RBAC strictly limits deployment target
+- Platform services protected from generated service failures
+
+### Development Workflow
+```bash
+# View platform services
+kubectl get all -n backstage
+
+# View your generated services  
+kubectl get all -n development
+
+# Clean up only generated services
+kubectl delete all --all -n development
+
+# Clean up everything
+kubectl delete namespace backstage development
 ```
 
 ## Cleanup
 
 ```bash
-# Delete all resources
-kubectl delete -f backstage/minikube/
+# Clean up only generated services (keeps platform running)
+kubectl delete all --all -n development
 
-# Or delete everything in namespace
-kubectl delete all --all
+# Clean up everything (complete teardown)  
+kubectl delete namespace backstage development
+
+# Or use deployment files
+kubectl delete -f backstage/minikube/backstage-deployment.yaml
 
 # Stop Minikube
 minikube stop

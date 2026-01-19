@@ -28,6 +28,19 @@ backstage-scaffolder/
 
 - **Backstage**: Developer portal UI (port 30700 in Minikube)
 - **Scaffolder Service**: REST API for project generation (port 30300 in Minikube)
+
+### Namespace Architecture
+
+The platform uses a multi-namespace architecture for service isolation:
+
+- **`backstage` namespace**: Platform services
+  - Backstage UI (developer portal)
+  - Scaffolder service (project generator)
+  - Supporting secrets and configurations
+- **`development` namespace**: Generated microservices
+  - All scaffolded Spring Boot services deploy here
+  - Isolated from platform services for security
+  - Simplified service discovery within namespace
 - **Deployment Configs**:
   - `backstage/minikube/` - Local development with Minikube
   - `backstage/kubernetes/` - K8s manifests for dev, test, stage, prod environments
@@ -129,32 +142,41 @@ To enable automatic GitHub repository creation:
 
 ### 3. Deploy Backstage and Scaffolder Services
 
-Deploy the complete stack to Minikube:
+Deploy the complete stack to Minikube with namespace isolation:
 
 ```bash
-cd backstage
-kubectl apply -f minikube-deployment-final.yaml
-kubectl apply -f scaffolder-deployment.yaml
+cd backstage/minikube
+kubectl apply -f backstage-deployment.yaml
 ```
 
-Wait for pods to be ready (this may take a few minutes):
+This creates:
+- `backstage` namespace: Platform services (Backstage UI + Scaffolder)
+- `development` namespace: Target for all generated services
+- Cross-namespace RBAC for secure service deployment
+
+Wait for pods to be ready in the backstage namespace:
 
 ```bash
-kubectl get pods -w
+kubectl get pods -n backstage -w
 ```
 
 Press `Ctrl+C` once you see both pods are `Running` and `READY 1/1`.
 
-Verify deployments:
+Verify deployments in the backstage namespace:
 
 ```bash
-kubectl get deployments
-kubectl get services
+kubectl get all -n backstage
 ```
 
 You should see:
 - `backstage` deployment and `backstage-service` (NodePort 30700)
 - `scaffolder-service` deployment and service (NodePort 30300)
+
+Verify the development namespace was created for generated services:
+
+```bash
+kubectl get namespace development
+```
 
 ### 4. Access Minikube Dashboard (Optional)
 
@@ -170,16 +192,16 @@ minikube dashboard --url
 
 ### 4. Set Up Port Forwards
 
-Run these commands in separate terminals to access the services:
+Run these commands in separate terminals to access the services in the backstage namespace:
 
 **Backstage UI** → localhost:30700
 ```bash
-kubectl port-forward svc/backstage-service 30700:7000 --address=127.0.0.1
+kubectl port-forward -n backstage svc/backstage-service 30700:7000 --address=127.0.0.1
 ```
 
 **Scaffolder API** → localhost:30300
 ```bash
-kubectl port-forward svc/scaffolder-service 30300:3000 --address=127.0.0.1
+kubectl port-forward -n backstage svc/scaffolder-service 30300:3000 --address=127.0.0.1
 ```
 
 ### 5. Access Backstage
@@ -229,32 +251,41 @@ kubectl get pods
 
 ### Access a Scaffolded Service
 
+Generated services deploy to the `development` namespace. To access them:
+
 **Option 1: Port forwarding**
 ```bash
-kubectl port-forward service/<service-name>-service <port>:<port>
+kubectl port-forward -n development service/<service-name>-service <port>:<port>
 ```
 
 **Option 2: Minikube service**
 ```bash
-minikube service <service-name>-service
+minikube service <service-name>-service -n development
 ```
 
 **Option 3: Get NodePort URL**
 ```bash
-minikube service <service-name>-service --url
+minikube service <service-name>-service --url -n development
 ```
 
 ### Delete a Scaffolded Service
 
+Services are deployed to the `development` namespace:
+
 ```bash
-# Replace <name> with your service name
-kubectl delete deployment <name>
-kubectl delete service <name>-service
+# Replace <name> with your service name  
+kubectl delete deployment <name> -n development
+kubectl delete service <name>-service -n development
 ```
 
 Or delete by label:
 ```bash
-kubectl delete deployment,service -l app=<name>
+kubectl delete deployment,service -l app=<name> -n development
+```
+
+Or clean up all generated services at once:
+```bash
+kubectl delete all --all -n development
 ```
 
 ## Cleaning Up
@@ -262,8 +293,11 @@ kubectl delete deployment,service -l app=<name>
 To completely remove Backstage and Scaffolder from Minikube:
 
 ```bash
-cd backstage
-kubectl delete -f minikube-deployment-final.yaml
+# Clean up platform and all generated services
+kubectl delete namespace backstage development
+
+# Or use deployment file
+kubectl delete -f backstage/minikube/backstage-deployment.yaml
 ```
 
 Or delete specific resources:
