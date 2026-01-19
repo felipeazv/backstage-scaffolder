@@ -240,7 +240,7 @@ app.post('/api/scaffold', async (req, res) => {
     
     // Generate JPA entity and repository if PostgreSQL is enabled
     if (persistence === 'postgresql') {
-      const helloWorldEntity = generateHelloWorldEntity(packageName);
+      const helloWorldEntity = generateHelloWorldEntity(packageName, java_version);
       fs.writeFileSync(path.join(srcDir, 'HelloWorld.java'), helloWorldEntity);
       
       const helloWorldRepository = generateHelloWorldRepository(packageName);
@@ -1636,10 +1636,13 @@ ${insertStatements}
 }
 
 // JPA Entity and Repository Generators
-function generateHelloWorldEntity(packageName) {
+function generateHelloWorldEntity(packageName, javaVersion = '17') {
+  // Use javax.persistence for Java 11 (Spring Boot 2.7.x), jakarta.persistence for Java 17+ (Spring Boot 3.x)
+  const persistenceImport = javaVersion === '11' ? 'javax.persistence' : 'jakarta.persistence';
+  
   return `package ${packageName};
 
-import jakarta.persistence.*;
+import ${persistenceImport}.*;
 import java.time.LocalDateTime;
 
 @Entity
