@@ -20,8 +20,8 @@ kubectl create secret generic github-token --from-literal=token=ghp_YourTokenHer
 ```bash
 # Build scaffolder service
 cd ../../scaffolder-service
-docker build -t scaffolder-service:latest .
-minikube image load scaffolder-service:latest
+docker build -t scaffolder-service:v8 .
+minikube image load scaffolder-service:v8
 
 # Build Backstage (if needed)
 cd ../backstage/backstage-app
@@ -177,10 +177,10 @@ minikube start
 # 1. Make code changes
 # 2. Rebuild Docker image
 cd scaffolder-service
-docker build -t scaffolder-service:latest .
+docker build -t scaffolder-service:v8 .
 
 # 3. Load into Minikube
-minikube image load scaffolder-service:latest
+minikube image load scaffolder-service:v8
 
 # 4. Restart deployment
 kubectl rollout restart deployment/scaffolder-service

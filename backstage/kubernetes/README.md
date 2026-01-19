@@ -99,8 +99,8 @@ docker login
 
 # Build and push scaffolder service
 cd scaffolder-service
-docker build -t yourorg/scaffolder-service:v1.0.0 .
-docker push yourorg/scaffolder-service:v1.0.0
+docker build -t yourorg/scaffolder-service:v8 .
+docker push yourorg/scaffolder-service:v8
 
 # Build and push Backstage (if you have a custom build)
 cd ../backstage/backstage-app
@@ -115,7 +115,7 @@ docker push yourorg/backstage:v1.0.0
 gcloud auth configure-docker
 
 # Build and push
-docker build -t gcr.io/YOUR_PROJECT_ID/scaffolder-service:v1.0.0 .
+docker build -t gcr.io/YOUR_PROJECT_ID/scaffolder-service:v8 .
 docker push gcr.io/YOUR_PR
 
 Create a dedicated namespace for your environment:
@@ -138,7 +138,7 @@ Edit the deployment files and replace `YOUR_REGISTRY` with your actual registry:
 ```bash
 # In production/scaffolder-deployment.yaml
 # Change: image: YOUR_REGISTRY/scaffolder-service:latest
-# To: image: do${ENV}.io/yourorg/scaffolder-service:v1.0.0
+# To: image: docker.io/yourorg/scaffolder-service:v8
 
 # In production/backstage-deployment.yaml
 # Change: image: YOUR_REGISTRY/backstage:latest

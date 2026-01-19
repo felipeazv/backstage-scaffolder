@@ -193,8 +193,8 @@ To enable automatic GitHub repository creation:
 3. Build and load the scaffolder service image:
    ```bash
    cd scaffolder-service
-   docker build -t scaffolder-service:latest .
-   minikube image load scaffolder-service:latest
+   docker build -t scaffolder-service:v8 .
+   minikube image load scaffolder-service:v8
    cd ..
    ```
 
@@ -694,6 +694,31 @@ Before submitting changes:
 # Validate deployment
 kubectl get all,pvc,secrets -n development
 ```
+
+## Troubleshooting
+
+### Java 11 + PostgreSQL Issues
+If a Java 11 service with PostgreSQL doesn't connect to the database:
+- **Symptom**: Service starts but no database endpoints work, no database health indicators
+- **Cause**: Wrong JPA imports (old scaffolder versions used `jakarta.persistence.*` for all Java versions)
+- **Solution**: Use scaffolder v7+ which automatically uses correct imports:
+  - Java 11: `javax.persistence.*` (Spring Boot 2.7.x)
+  - Java 17+: `jakarta.persistence.*` (Spring Boot 3.x)
+
+### Cleanup Issues
+If PostgreSQL resources remain after service deletion:
+- **Symptom**: Orphaned services like `servicename-postgres` or PVCs `postgres-storage-servicename-postgres-0`
+- **Cause**: Resource naming pattern mismatch in older scaffolder versions
+- **Solution**: Use scaffolder v8+ with fixed cleanup patterns, or manually delete:
+  ```bash
+  kubectl delete service servicename-postgres -n development
+  kubectl delete pvc postgres-storage-servicename-postgres-0 -n development
+  ```
+
+### Common Issues
+- **Port conflicts**: Services use NodePort 30000+ range. Check existing services: `kubectl get svc -A`
+- **Image pull errors**: Ensure `minikube image load` completed successfully
+- **GitHub integration**: Verify token has `repo` and `delete_repo` scopes
 
 ## License
 

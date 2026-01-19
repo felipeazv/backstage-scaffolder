@@ -45,10 +45,10 @@ spec:
       - name: scaffolder-service
         # CHANGE THIS: Use your container registry
         # Examples: 
-        #   - docker.io/yourorg/scaffolder-service:v1.0.0
-        #   - gcr.io/your-project/scaffolder-service:v1.0.0
-        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v14
-        image: YOUR_REGISTRY/scaffolder-service:v14
+        #   - docker.io/yourorg/scaffolder-service:v8
+        #   - gcr.io/your-project/scaffolder-service:v8
+        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v8
+        image: YOUR_REGISTRY/scaffolder-service:v8
         imagePullPolicy: Always
         env:
         - name: GITHUB_TOKEN

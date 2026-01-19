@@ -45,6 +45,24 @@ src/main/java/com/example/
         └── V2__Insert_sample_data.sql        # Sample data (20 records)
 ```
 
+## Recent Improvements
+
+### Java 11 Persistence Support (v7-v8)
+- **Fixed JPA imports**: Java 11 services now use `javax.persistence.*` (Java EE) instead of incorrect `jakarta.persistence.*` 
+- **Spring Boot compatibility**: Ensures Java 11 + Spring Boot 2.7.x works correctly with PostgreSQL
+- **Automatic import selection**: Scaffolder automatically chooses correct persistence API based on Java version
+  - Java 11: `javax.persistence.*` (Spring Boot 2.7.x)  
+  - Java 17+: `jakarta.persistence.*` (Spring Boot 3.x)
+
+### Enhanced Cleanup Functionality (v8)
+- **Fixed PostgreSQL cleanup**: Corrected service and PVC naming patterns for complete resource removal
+- **Improved resource detection**: Now properly deletes all PostgreSQL components:
+  - StatefulSets: `${serviceName}-postgres`
+  - Services: `${serviceName}-postgres` (fixed from incorrect `-service` suffix)
+  - PVCs: `postgres-storage-${serviceName}-postgres-0` (StatefulSet naming pattern)
+  - Secrets: `${serviceName}-postgres-secret`
+- **Complete cleanup**: No orphaned resources left behind during service deletion
+
 ## API Endpoints
 
 ### Service Management
@@ -140,7 +158,7 @@ node server.js
 
 ### Building Docker Image
 ```bash
-docker build -t scaffolder-service:latest .
+docker build -t scaffolder-service:v8 .
 ```
 
 ### Testing
@@ -170,6 +188,8 @@ curl -X POST http://localhost:3000/scaffold \
 
 ## Version History
 
+- **v8**: Fixed PostgreSQL cleanup (correct service/PVC naming patterns)
+- **v7**: Fixed Java 11 persistence imports (javax.persistence vs jakarta.persistence)
 - **v17**: Added PostgreSQL persistence layer with JPA and Flyway
 - **v16**: Multi-version Java support (11, 17, 21)
 - **v15**: Enhanced Kubernetes deployment with namespace isolation
