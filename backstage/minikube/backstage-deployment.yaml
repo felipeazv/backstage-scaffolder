@@ -16,14 +16,17 @@ metadata:
   name: scaffolder-deployer
 rules:
 - apiGroups: ["apps"]
-  resources: ["deployments"]
+  resources: ["deployments", "statefulsets"]
   verbs: ["create", "update", "get", "list", "watch", "delete"]
 - apiGroups: [""]
-  resources: ["services", "pods"]
+  resources: ["services", "pods", "secrets"]
   verbs: ["create", "update", "get", "list", "watch", "delete"]
 - apiGroups: [""]
   resources: ["pods/log"]
   verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["create", "update", "get", "list", "watch", "delete"]
 
 ---
 # ClusterRoleBinding for scaffolder

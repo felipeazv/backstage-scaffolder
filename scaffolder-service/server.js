@@ -134,6 +134,7 @@ app.post('/api/scaffold', async (req, res) => {
       owner,
       port,
       java_version,
+      persistence,
       include_docker,
       include_k8s,
       target_namespace
@@ -186,6 +187,7 @@ app.post('/api/scaffold', async (req, res) => {
     // Persist initial scaffold metadata early so deploy can read namespace even
     // if later steps fail. Force all services to development namespace.
     const FORCED_TARGET_NAMESPACE = 'development';
+    console.log(`[DEBUG] FORCED_TARGET_NAMESPACE value: ${FORCED_TARGET_NAMESPACE}`);
     
     // Validate and override namespace to development
     if (target_namespace && target_namespace !== FORCED_TARGET_NAMESPACE) {
@@ -201,6 +203,7 @@ app.post('/api/scaffold', async (req, res) => {
       port: port || 8080,
       javaVersion: java_version || '21',
     };
+    console.log(`[DEBUG] initialMeta.namespace value: ${initialMeta.namespace}`);
     console.log(`[SCAFFOLD] Deploying to namespace: ${FORCED_TARGET_NAMESPACE}`);
     try {
       const metaPath = path.join(projectDir, 'scaffold-metadata.json');
@@ -214,11 +217,11 @@ app.post('/api/scaffold', async (req, res) => {
     }
 
     // Generate pom.xml
-    const pomXml = generatePomXml(component_id, packageName, java_version);
+    const pomXml = generatePomXml(component_id, packageName, java_version, persistence);
     fs.writeFileSync(path.join(projectDir, 'pom.xml'), pomXml);
 
     // Generate application.properties
-    const appProperties = generateApplicationProperties(port);
+    const appProperties = generateApplicationProperties(port, component_id, persistence);
     fs.writeFileSync(path.join(resourcesDir, 'application.properties'), appProperties);
 
     // Generate Spring Boot Application class
@@ -232,8 +235,17 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Generate REST Controller
     const controllerClassName = appClassName.replace('Application', 'Controller');
-    const controllerJava = generateController(packageName, controllerClassName, component_id);
+    const controllerJava = generateController(packageName, controllerClassName, component_id, persistence);
     fs.writeFileSync(path.join(srcDir, `${controllerClassName}.java`), controllerJava);
+    
+    // Generate JPA entity and repository if PostgreSQL is enabled
+    if (persistence === 'postgresql') {
+      const helloWorldEntity = generateHelloWorldEntity(packageName);
+      fs.writeFileSync(path.join(srcDir, 'HelloWorld.java'), helloWorldEntity);
+      
+      const helloWorldRepository = generateHelloWorldRepository(packageName);
+      fs.writeFileSync(path.join(srcDir, 'HelloWorldRepository.java'), helloWorldRepository);
+    }
 
     // Generate Dockerfile
     if (include_docker) {
@@ -243,11 +255,37 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Generate K8s manifests
     if (include_k8s) {
-      const deployment = generateK8sDeployment(component_id, owner, port, FORCED_TARGET_NAMESPACE);
+      const deployment = generateK8sDeployment(component_id, owner, port, FORCED_TARGET_NAMESPACE, persistence);
       fs.writeFileSync(path.join(k8sDir, 'deployment.yaml'), deployment);
 
       const service = generateK8sService(component_id, port, FORCED_TARGET_NAMESPACE);
       fs.writeFileSync(path.join(k8sDir, 'service.yaml'), service);
+      
+      // Generate PostgreSQL resources if persistence is enabled
+      if (persistence === 'postgresql') {
+        const postgresSecret = generatePostgreSQLSecret(component_id, FORCED_TARGET_NAMESPACE);
+        fs.writeFileSync(path.join(k8sDir, 'postgres-secret.yaml'), postgresSecret);
+        
+        const postgresStatefulSet = generatePostgreSQLStatefulSet(component_id, FORCED_TARGET_NAMESPACE);
+        fs.writeFileSync(path.join(k8sDir, 'postgres-statefulset.yaml'), postgresStatefulSet);
+        
+        const postgresService = generatePostgreSQLService(component_id, FORCED_TARGET_NAMESPACE);
+        fs.writeFileSync(path.join(k8sDir, 'postgres-service.yaml'), postgresService);
+      }
+    }
+    
+    // Generate Flyway migrations if PostgreSQL is enabled
+    if (persistence === 'postgresql') {
+      const migrationDir = path.join(resourcesDir, 'db', 'migration');
+      fs.mkdirSync(migrationDir, { recursive: true });
+      
+      // Generate initial schema migration with hello-world table
+      const initialMigration = generateInitialMigration();
+      fs.writeFileSync(path.join(migrationDir, 'V1__Initial_schema.sql'), initialMigration);
+      
+      // Generate sample data migration
+      const sampleDataMigration = generateSampleDataMigration();
+      fs.writeFileSync(path.join(migrationDir, 'V2__Sample_data.sql'), sampleDataMigration);
     }
 
     // Generate catalog-info.yaml
@@ -322,9 +360,41 @@ app.post('/api/scaffold', async (req, res) => {
 
 // Template generators
 
-function generatePomXml(serviceName, packageName, javaVersion) {
+function generatePomXml(serviceName, packageName, javaVersion, persistence = 'none') {
   // Spring Boot 3.x requires Java 17+, use 2.7.x for Java 11
   const springBootVersion = javaVersion === '11' ? '2.7.18' : '3.2.1';
+  
+  // PostgreSQL dependencies
+  const postgresqlDeps = persistence === 'postgresql' ? `
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>` : '';
+
+  // Flyway Maven plugin for PostgreSQL
+  const flywayPlugin = persistence === 'postgresql' ? `
+            <plugin>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-maven-plugin</artifactId>
+                <version>9.22.3</version>
+                <configuration>
+                    <url>jdbc:postgresql://\${DB_HOST:localhost}:\${DB_PORT:5432}/\${DB_NAME:${serviceName}}</url>
+                    <user>\${DB_USER:${serviceName}}</user>
+                    <password>\${DB_PASSWORD:password}</password>
+                    <locations>
+                        <location>classpath:db/migration</location>
+                    </locations>
+                </configuration>
+            </plugin>` : '';
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -374,7 +444,7 @@ function generatePomXml(serviceName, packageName, javaVersion) {
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
-        </dependency>
+        </dependency>${postgresqlDeps}
     </dependencies>
 
     <build>
@@ -399,20 +469,20 @@ function generatePomXml(serviceName, packageName, javaVersion) {
                     <source>\${java.version}</source>
                     <target>\${java.version}</target>
                 </configuration>
-            </plugin>
+            </plugin>${flywayPlugin}
         </plugins>
     </build>
 </project>`;
 }
 
-function generateApplicationProperties(port) {
-  return `# Server Configuration
+function generateApplicationProperties(port, serviceName, persistence = 'none') {
+  const baseConfig = `# Server Configuration
 server.port=${port}
 server.servlet.context-path=/
 
 # Application Information
-spring.application.name=spring-boot-service
-spring.application.display-name=Spring Boot Service
+spring.application.name=${serviceName}
+spring.application.display-name=${serviceName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
 
 # Actuator Configuration
 management.endpoints.web.exposure.include=health,info,metrics
@@ -422,8 +492,29 @@ management.health.readinessState.enabled=true
 
 # Logging
 logging.level.root=INFO
-logging.level.com.example=DEBUG
-`;
+logging.level.com.example=DEBUG`;
+
+  const postgresqlConfig = persistence === 'postgresql' ? `
+
+# PostgreSQL Database Configuration
+spring.datasource.url=jdbc:postgresql://\${DB_HOST:${serviceName}-postgres}:\${DB_PORT:5432}/\${DB_NAME:${serviceName}}
+spring.datasource.username=\${DB_USER:${serviceName}}
+spring.datasource.password=\${DB_PASSWORD:password}
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# JPA Configuration
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.show-sql=false
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect
+spring.jpa.properties.hibernate.format_sql=true
+
+# Flyway Configuration
+spring.flyway.enabled=true
+spring.flyway.locations=classpath:db/migration
+spring.flyway.baseline-on-migrate=true
+spring.flyway.baseline-version=0` : '';
+
+  return baseConfig + postgresqlConfig + '\n';
 }
 
 function generateApplicationClass(packageName, className) {
@@ -443,9 +534,73 @@ public class ${className} {
 `;
 }
 
-function generateController(packageName, className, serviceName) {
+function generateController(packageName, className, serviceName, persistence = 'none') {
   const displayName = serviceName.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  return `package ${packageName};
+  
+  if (persistence === 'postgresql') {
+    return `package ${packageName};
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.List;
+
+@RestController
+public class ${className} {
+
+    @Autowired
+    private HelloWorldRepository helloWorldRepository;
+
+    @GetMapping("/")
+    public Map<String, Object> root() {
+        Map<String, Object> response = new HashMap<>();
+        response.put("service", "${serviceName}");
+        response.put("message", "Welcome to ${displayName} with PostgreSQL!");
+        response.put("status", "running");
+        response.put("database", "PostgreSQL connected");
+        response.put("totalRecords", helloWorldRepository.count());
+        return response;
+    }
+
+    @GetMapping("/health")
+    public Map<String, String> health() {
+        Map<String, String> response = new HashMap<>();
+        response.put("status", "UP");
+        response.put("service", "${serviceName}");
+        response.put("database", "PostgreSQL connected");
+        return response;
+    }
+
+    @GetMapping("/info")
+    public Map<String, String> info() {
+        Map<String, String> response = new HashMap<>();
+        response.put("name", "${serviceName}");
+        response.put("version", "1.0.0");
+        response.put("description", "${displayName} Service");
+        response.put("persistence", "PostgreSQL + Flyway");
+        return response;
+    }
+    
+    @GetMapping("/hello-world")
+    public List<HelloWorld> getAllHelloWorld() {
+        return helloWorldRepository.findAll();
+    }
+    
+    @PostMapping("/hello-world")
+    public HelloWorld createHelloWorld(@RequestBody Map<String, String> request) {
+        HelloWorld helloWorld = new HelloWorld();
+        helloWorld.setNickname(request.get("nickname"));
+        return helloWorldRepository.save(helloWorld);
+    }
+
+}
+`;
+  } else {
+    return `package ${packageName};
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -483,6 +638,7 @@ public class ${className} {
 
 }
 `;
+  }
 }
 
 function generateDockerfile(serviceName, javaVersion) {
@@ -514,9 +670,29 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 `;
 }
 
-function generateK8sDeployment(serviceName, owner, port, namespace) {
+function generateK8sDeployment(serviceName, owner, port, namespace, persistence = 'none') {
   const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
-  const templateNsBlock = '';
+  
+  // PostgreSQL environment variables
+  const postgresEnvVars = persistence === 'postgresql' ? `
+        env:
+        - name: DB_HOST
+          value: "${serviceName}-postgres"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_NAME
+          value: "${serviceName}"
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: ${serviceName}-postgres-secret
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${serviceName}-postgres-secret
+              key: password` : '';
+  
   return `apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -541,7 +717,7 @@ spec:
         imagePullPolicy: Never
         ports:
         - containerPort: ${port}
-          name: http
+          name: http${postgresEnvVars}
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
@@ -864,6 +1040,65 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
 
     // Apply deployment
     sendEvent({ log: 'Applying Kubernetes deployment...' });
+    
+    // First, apply PostgreSQL resources if they exist (in correct order)
+    const postgresFiles = [
+      'postgres-secret.yaml',
+      'postgres-service.yaml', 
+      'postgres-statefulset.yaml'
+    ];
+    
+    for (const file of postgresFiles) {
+      const filePath = path.join(k8sDir, file);
+      if (fs.existsSync(filePath)) {
+        sendEvent({ log: `Applying ${file}...` });
+        try {
+          const nsArg = namespace ? `-n ${namespace}` : '';
+          const output = execSync(`kubectl apply ${nsArg} -f "${filePath}"`, { encoding: 'utf8' });
+          sendEvent({ log: output.trim() });
+        } catch (error) {
+          sendEvent({ error: `Failed to apply ${file}: ${error.message}` });
+          return res.end();
+        }
+      }
+    }
+    
+    // If PostgreSQL resources were applied, wait for PostgreSQL to be ready
+    const postgresStatefulSetPath = path.join(k8sDir, 'postgres-statefulset.yaml');
+    if (fs.existsSync(postgresStatefulSetPath)) {
+      sendEvent({ log: 'Waiting for PostgreSQL to be ready...' });
+      let pgAttempts = 0;
+      const maxPgAttempts = 30;
+      
+      while (pgAttempts < maxPgAttempts) {
+        try {
+          const nsArg = namespace ? `-n ${namespace}` : '';
+          const pgStatus = execSync(`kubectl get pods ${nsArg} -l app=${serviceName}-postgres -o jsonpath='{.items[0].status.phase}'`, { encoding: 'utf8' });
+          sendEvent({ log: `PostgreSQL pod status: ${pgStatus}` });
+          
+          if (pgStatus.includes('Running')) {
+            sendEvent({ log: '✓ PostgreSQL is running!' });
+            // Wait additional time for PostgreSQL to be fully ready
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            break;
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          pgAttempts++;
+        } catch (error) {
+          sendEvent({ log: `Waiting for PostgreSQL... (${pgAttempts}/${maxPgAttempts})` });
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          pgAttempts++;
+        }
+      }
+      
+      if (pgAttempts >= maxPgAttempts) {
+        sendEvent({ error: 'Timeout waiting for PostgreSQL to start' });
+        return res.end();
+      }
+    }
+    
+    // Now apply the application deployment
     try {
       const nsArg = namespace ? `-n ${namespace}` : '';
       const deployOutput = execSync(`kubectl apply ${nsArg} -f "${path.join(k8sDir, 'deployment.yaml')}"`, { encoding: 'utf8' });
@@ -1165,6 +1400,262 @@ app.delete('/api/cleanup-all', async (req, res) => {
     });
   }
 });
+
+// PostgreSQL Kubernetes Resource Generators
+function generatePostgreSQLSecret(serviceName, namespace) {
+  const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  return `apiVersion: v1
+kind: Secret
+metadata:
+  name: ${serviceName}-postgres-secret
+${nsBlock}type: Opaque
+data:
+  username: ${Buffer.from(serviceName).toString('base64')}
+  password: ${Buffer.from('password').toString('base64')}
+`;
+}
+
+function generatePostgreSQLStatefulSet(serviceName, namespace) {
+  const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  return `apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ${serviceName}-postgres
+${nsBlock}  labels:
+    app: ${serviceName}-postgres
+spec:
+  serviceName: ${serviceName}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${serviceName}-postgres
+  template:
+    metadata:
+      labels:
+        app: ${serviceName}-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15.4
+        env:
+        - name: POSTGRES_DB
+          value: "${serviceName}"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: ${serviceName}-postgres-secret
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${serviceName}-postgres-secret
+              key: password
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - containerPort: 5432
+          name: postgres
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-storage
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+`;
+}
+
+function generatePostgreSQLService(serviceName, namespace) {
+  const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  return `apiVersion: v1
+kind: Service
+metadata:
+  name: ${serviceName}-postgres
+${nsBlock}  labels:
+    app: ${serviceName}-postgres
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: ${serviceName}-postgres
+`;
+}
+
+// Flyway Migration Generators
+function generateInitialMigration() {
+  return `-- Initial schema with hello-world table
+-- Created: ${new Date().toISOString()}
+
+CREATE TABLE hello_world (
+    id BIGSERIAL PRIMARY KEY,
+    nickname VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Create index on nickname for faster lookups
+CREATE INDEX idx_hello_world_nickname ON hello_world(nickname);
+
+-- Add a trigger to update the updated_at column
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+CREATE TRIGGER update_hello_world_updated_at 
+    BEFORE UPDATE ON hello_world 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+`;
+}
+
+function generateSampleDataMigration() {
+  // Fun adjectives and substantives for random nickname generation
+  const adjectives = [
+    'happy', 'clever', 'brave', 'swift', 'mighty', 'gentle', 'wise', 'bold',
+    'bright', 'calm', 'epic', 'free', 'grand', 'noble', 'quick', 'super',
+    'wild', 'zesty', 'cosmic', 'magic', 'steel', 'golden', 'silver', 'diamond'
+  ];
+  
+  const substantives = [
+    'falcon', 'tiger', 'dragon', 'phoenix', 'eagle', 'wolf', 'lion', 'bear',
+    'shark', 'dolphin', 'whale', 'hawk', 'panther', 'cheetah', 'jaguar', 'lynx',
+    'turtle', 'rabbit', 'fox', 'deer', 'elk', 'moose', 'bison', 'stallion'
+  ];
+  
+  // Generate 20 random combinations
+  let insertStatements = '';
+  for (let i = 0; i < 20; i++) {
+    const randomAdj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const randomNoun = substantives[Math.floor(Math.random() * substantives.length)];
+    const nickname = `${randomAdj}-${randomNoun}`;
+    insertStatements += `INSERT INTO hello_world (nickname) VALUES ('${nickname}');\n`;
+  }
+  
+  return `-- Sample data for hello-world table
+-- Created: ${new Date().toISOString()}
+
+${insertStatements}
+-- Verify the data
+-- SELECT id, nickname, created_at FROM hello_world ORDER BY id;
+`;
+}
+
+// JPA Entity and Repository Generators
+function generateHelloWorldEntity(packageName) {
+  return `package ${packageName};
+
+import jakarta.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "hello_world")
+public class HelloWorld {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    
+    @Column(nullable = false, length = 100)
+    private String nickname;
+    
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+    
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+    
+    public HelloWorld() {}
+    
+    public HelloWorld(String nickname) {
+        this.nickname = nickname;
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    // Getters and Setters
+    public Long getId() {
+        return id;
+    }
+    
+    public void setId(Long id) {
+        this.id = id;
+    }
+    
+    public String getNickname() {
+        return nickname;
+    }
+    
+    public void setNickname(String nickname) {
+        this.nickname = nickname;
+        this.updatedAt = LocalDateTime.now();
+    }
+    
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+    
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+    
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+    
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+    
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+    
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+}
+`;
+}
+
+function generateHelloWorldRepository(packageName) {
+  return `package ${packageName};
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+import java.util.List;
+
+@Repository
+public interface HelloWorldRepository extends JpaRepository<HelloWorld, Long> {
+    
+    List<HelloWorld> findByNicknameContainingIgnoreCase(String nickname);
+    
+    List<HelloWorld> findByOrderByCreatedAtDesc();
+}
+`;
+}
 
 // Root route - API status
 app.get('/', (req, res) => {
