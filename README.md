@@ -29,7 +29,24 @@ backstage-scaffolder/
 ### Components
 
 - **Backstage**: Developer portal UI (port 30700 in Minikube)
-- **Scaffolder Service**: REST API for project generation (port 30300 in Minikube)
+- **Scaffolder Service**: REST API for project generation with PostgreSQL support (port 30300 in Minikube)
+
+### Service Generation Options
+
+**Basic Services:**
+- Spring Boot applications (Java 11/17/21)
+- REST API endpoints
+- Docker containerization
+- Kubernetes deployment
+
+**Persistence-Enabled Services (PostgreSQL):**
+- Everything above, plus:
+- PostgreSQL StatefulSet with persistent storage
+- Spring Data JPA integration
+- Flyway database migrations
+- Sample data generation (hello-world table with 20 records)
+- Database connection pooling
+- Environment-based configuration
 
 ### Namespace Architecture
 
@@ -47,15 +64,24 @@ The platform uses a multi-namespace architecture for service isolation:
 ### Deployment Flow
 
 **Direct Deployment Model** (this implementation):
+
+**For Basic Services:**
 ```
 User → Backstage UI → Scaffolder Service → Docker Build → K8s Deploy → Running Service
 ```
 
+**For PostgreSQL-Enabled Services:**
+```
+User → Backstage UI → Scaffolder Service → Generate JPA Code → Deploy PostgreSQL → Docker Build → K8s Deploy → Connected Service
+```
+
 1. User fills service form in Backstage UI
-2. Scaffolder service generates Spring Boot project
-3. Scaffolder builds Docker image directly
-4. Scaffolder deploys to Kubernetes immediately
-5. Service is available within seconds
+2. Scaffolder service generates Spring Boot project with chosen features
+3. **If PostgreSQL selected**: Deploys PostgreSQL StatefulSet with persistent storage
+4. **If PostgreSQL selected**: Runs Flyway migrations and inserts sample data
+5. Scaffolder builds Docker image with database connectivity
+6. Scaffolder deploys service to Kubernetes with environment variables
+7. Service is available with database integration within seconds
 
 **vs Traditional CI/CD Model**:
 ```
@@ -252,16 +278,80 @@ http://localhost:30700
    - **Component ID**: Unique service identifier (e.g., `user-service`)
    - **Port**: Service port (e.g., `8080`)
    - **Description**: Brief service description
+   - **Java Version**: Select Java 11, 17, or 21
+   - **Persistence Layer**: Choose between:
+     - **No Database** - Basic service without persistence
+     - **PostgreSQL 🐘** - Full-featured PostgreSQL database integration
 3. Click "Create" to scaffold and deploy
 
 The scaffolder will:
 - **Check GitHub** for existing repository (prevents duplicates)
-- Generate a Spring Boot project from template
+- Generate a Spring Boot project from template with selected features
+- **Configure PostgreSQL** if selected (includes JPA, Flyway, sample data)
 - **Create GitHub repository** (if GitHub integration enabled)
 - **Push code to GitHub** with initial commit
-- Build a Docker image
-- Deploy to Minikube
+- Build and deploy service Docker image
+- **Deploy PostgreSQL StatefulSet** (if persistence layer selected)
+- Deploy service to Kubernetes with database connectivity
 - Expose the service via NodePort
+
+## Persistence Layer Features
+
+When PostgreSQL is selected, the scaffolder creates:
+
+### Database Architecture
+- **Isolated PostgreSQL instance** per service (StatefulSet with persistent storage)
+- **Database connection pooling** with HikariCP
+- **Environment-based configuration** (dev, test, prod profiles)
+- **Kubernetes secrets** for secure credential management
+- **Persistent volumes** ensuring data survives pod restarts
+
+### Generated Code Components
+- **Spring Data JPA entities** with sample `HelloWorld` model
+- **JPA repositories** with CRUD operations
+- **REST controllers** exposing database endpoints
+- **Database configuration** with PostgreSQL driver
+- **Flyway migrations** for schema versioning and sample data
+
+### Sample Data & API Endpoints
+Each PostgreSQL-enabled service includes:
+- **Auto-generated sample data**: 20 records with random adjective + noun nicknames
+- **REST API endpoints**:
+  - `GET /api/hello-world` - List all records (paginated)
+  - `GET /api/hello-world/{id}` - Get specific record
+  - `POST /api/hello-world` - Create new record
+  - `PUT /api/hello-world/{id}` - Update record
+  - `DELETE /api/hello-world/{id}` - Delete record
+
+### Database Schema
+```sql
+-- V1__Create_hello_world_table.sql
+CREATE TABLE hello_world (
+    id BIGSERIAL PRIMARY KEY,
+    nickname VARCHAR(100) NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Testing Database Integration
+Once deployed, test your service's database endpoints:
+
+```bash
+# Get service URL (replace <service-name> with your actual service name)
+SERVICE_URL=$(minikube service <service-name>-service --url -n development)
+
+# List all hello-world records
+curl $SERVICE_URL/api/hello-world
+
+# Get a specific record
+curl $SERVICE_URL/api/hello-world/1
+
+# Create a new record
+curl -X POST $SERVICE_URL/api/hello-world \
+  -H "Content-Type: application/json" \
+  -d '{"nickname": "brave-eagle"}'
+```
 
 **With GitHub Integration Enabled:**
 - Each service automatically gets its own GitHub repository
@@ -278,9 +368,14 @@ The scaffolder will:
 ### View Deployed Services
 
 ```bash
-kubectl get deployments
-kubectl get services
-kubectl get pods
+# All services in development namespace
+kubectl get deployments,services,statefulsets -n development
+
+# View all pods (services + databases)
+kubectl get pods -n development
+
+# Check persistent volumes for database storage
+kubectl get pvc -n development
 ```
 
 ### Access a Scaffolded Service
@@ -302,24 +397,65 @@ minikube service <service-name>-service -n development
 minikube service <service-name>-service --url -n development
 ```
 
+### Database Management
+
+For services with PostgreSQL persistence:
+
+**Connect to PostgreSQL directly:**
+```bash
+# Get database pod name
+kubectl get pods -n development -l app=<service-name>-postgres
+
+# Connect to PostgreSQL shell
+kubectl exec -it -n development <service-name>-postgres-0 -- psql -U postgres -d <service-name>
+
+# Example queries
+\l                    # List databases
+\c <service-name>     # Connect to service database
+\dt                   # List tables
+SELECT * FROM hello_world LIMIT 10;  # Query sample data
+```
+
+**View database logs:**
+```bash
+kubectl logs -n development <service-name>-postgres-0
+```
+
+**Check database storage:**
+```bash
+kubectl get pvc -n development
+kubectl describe pvc <service-name>-postgres-storage -n development
+```
+
 ### Delete a Scaffolded Service
 
-Services are deployed to the `development` namespace:
+Services are deployed to the `development` namespace. For complete cleanup:
 
+**With PostgreSQL persistence:**
 ```bash
-# Replace <name> with your service name  
+# Replace <name> with your service name
+kubectl delete deployment <name> -n development
+kubectl delete service <name>-service -n development
+kubectl delete statefulset <name>-postgres -n development
+kubectl delete service <name>-postgres-service -n development
+kubectl delete secret <name>-postgres-secret -n development
+kubectl delete pvc <name>-postgres-storage -n development
+```
+
+**Basic services (no database):**
+```bash
 kubectl delete deployment <name> -n development
 kubectl delete service <name>-service -n development
 ```
 
-Or delete by label:
+**Delete by label (all resources for a service):**
 ```bash
-kubectl delete deployment,service -l app=<name> -n development
+kubectl delete all,pvc,secrets -l app=<name> -n development
 ```
 
-Or clean up all generated services at once:
+**Clean up all generated services at once:**
 ```bash
-kubectl delete all --all -n development
+kubectl delete all,pvc,secrets --all -n development
 ```
 
 ## Cleaning Up
@@ -409,9 +545,80 @@ Restart port-forwards if needed (see Quick Start step 3).
 
 Check pod logs:
 ```bash
-kubectl get pods
-kubectl logs <pod-name>
-kubectl describe pod <pod-name>
+# For services in development namespace
+kubectl get pods -n development
+kubectl logs <pod-name> -n development
+kubectl describe pod <pod-name> -n development
+
+# For platform services in backstage namespace
+kubectl get pods -n backstage
+kubectl logs <pod-name> -n backstage
+kubectl describe pod <pod-name> -n backstage
+```
+
+### Database Connection Issues
+
+For PostgreSQL-enabled services:
+
+**Check database pod status:**
+```bash
+kubectl get pods -n development -l app=<service-name>-postgres
+kubectl logs <service-name>-postgres-0 -n development
+```
+
+**Test database connectivity:**
+```bash
+# Connect to PostgreSQL pod
+kubectl exec -it -n development <service-name>-postgres-0 -- psql -U postgres
+
+# Check databases
+\l
+
+# Connect to service database
+\c <service-name>
+
+# Verify sample data
+SELECT COUNT(*) FROM hello_world;
+```
+
+**Check service database configuration:**
+```bash
+# Check if database secret exists
+kubectl get secret <service-name>-postgres-secret -n development
+
+# View service environment variables
+kubectl describe pod <service-name>-<pod-suffix> -n development
+```
+
+### Scaffolding Failures
+
+**Check scaffolder service logs:**
+```bash
+kubectl logs -n backstage deployment/scaffolder-service
+```
+
+**Common issues:**
+- **GitHub token expired**: Update the `github-token` secret
+- **Insufficient RBAC**: Ensure ClusterRole includes all required permissions
+- **Namespace issues**: Verify development namespace exists
+- **Image pull errors**: Check if Docker images are properly loaded in Minikube
+
+### Storage Issues (PostgreSQL)
+
+**Check persistent volumes:**
+```bash
+kubectl get pvc -n development
+kubectl describe pvc <service-name>-postgres-storage -n development
+```
+
+**If PVC is stuck in Pending:**
+```bash
+# Check if storage class exists
+kubectl get storageclass
+
+# For Minikube, ensure it's started properly
+minikube addons enable default-storageclass
+minikube addons enable storage-provisioner
 ```
 
 ### Minikube Issues
@@ -427,22 +634,66 @@ Check Minikube status:
 minikube status
 ```
 
+Re-load custom images after Minikube restart:
+```bash
+cd scaffolder-service
+docker build -t scaffolder-service:latest .
+minikube image load scaffolder-service:latest
+```
+
 ## Technologies
 
+### Core Platform
 - **Backstage**: Spotify's open-source developer portal
-- **Spring Boot**: Java microservices framework
+- **Node.js**: Scaffolder service runtime
 - **Kubernetes**: Container orchestration (via Minikube)
 - **Docker**: Containerization
-- **Node.js**: Scaffolder service runtime
+
+### Generated Services
+- **Spring Boot**: Java microservices framework (versions 11/17/21)
 - **Maven**: Java build tool
+- **PostgreSQL**: Relational database (optional)
+- **Spring Data JPA**: Database abstraction layer
+- **Flyway**: Database migration tool
+- **HikariCP**: High-performance connection pooling
 
 ## Contributing
 
-When adding new templates:
+### Adding New Templates
+
+When adding new service templates:
 1. Create template YAML in `backstage/templates/`
-2. Update scaffolder service logic if needed
-3. Test scaffolding through the UI
-4. Verify deployment to Minikube
+2. Update scaffolder service logic in `scaffolder-service/server.js`
+3. Add new database support (if needed) following PostgreSQL example
+4. Test scaffolding through the Backstage UI
+5. Verify deployment to Minikube with all features
+6. Update documentation to reflect new capabilities
+
+### Extending Database Support
+
+To add support for additional databases:
+1. **Update UI**: Add new option to persistence dropdown in `CreateServicePage.js`
+2. **Scaffolder Logic**: Add database-specific generators in `scaffolder-service/server.js`
+3. **Dependencies**: Update `generatePomXml()` with required dependencies
+4. **Kubernetes Resources**: Create database deployment templates
+5. **Migrations**: Add database-specific migration patterns
+6. **Configuration**: Update application properties templates
+7. **RBAC**: Ensure ClusterRole includes necessary permissions
+
+### Testing Changes
+
+Before submitting changes:
+```bash
+# Test basic service creation
+1. Test service without persistence
+2. Test service with PostgreSQL persistence
+3. Verify database connectivity and sample data
+4. Test service deletion and cleanup
+5. Check logs for any errors
+
+# Validate deployment
+kubectl get all,pvc,secrets -n development
+```
 
 ## License
 
