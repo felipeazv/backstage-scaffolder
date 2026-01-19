@@ -2,6 +2,8 @@
 
 This directory contains Kubernetes manifests optimized for local development with Minikube.
 
+> **⚡ Direct Deployment Model**: This setup uses **simplified direct deployment** where the Backstage scaffolder service immediately builds Docker images and deploys services to Kubernetes. No external CI/CD pipeline is required - perfect for rapid local development and testing.
+
 ## Quick Start
 
 ### 1. Start Minikube

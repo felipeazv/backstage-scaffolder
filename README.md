@@ -2,6 +2,8 @@
 
 A local Backstage developer portal for scaffolding Spring Boot microservices with automated Kubernetes deployment on Minikube.
 
+> **📋 Architecture Note**: This implementation follows a **simplified deployment model** for rapid development and prototyping. Backstage performs **direct deployment to Kubernetes** without traditional CI/CD pipeline integration (Jenkins, GitLab CI, GitHub Actions, etc.). This approach enables immediate service deployment and testing, making it ideal for local development, proof-of-concepts, and learning environments. For production scenarios, consider integrating with your organization's existing CI/CD tooling.
+
 ## Overview
 
 This project provides a complete developer platform that enables teams to:
@@ -41,6 +43,38 @@ The platform uses a multi-namespace architecture for service isolation:
   - All scaffolded Spring Boot services deploy here
   - Isolated from platform services for security
   - Simplified service discovery within namespace
+
+### Deployment Flow
+
+**Direct Deployment Model** (this implementation):
+```
+User → Backstage UI → Scaffolder Service → Docker Build → K8s Deploy → Running Service
+```
+
+1. User fills service form in Backstage UI
+2. Scaffolder service generates Spring Boot project
+3. Scaffolder builds Docker image directly
+4. Scaffolder deploys to Kubernetes immediately
+5. Service is available within seconds
+
+**vs Traditional CI/CD Model**:
+```
+User → Backstage → Git Push → CI Pipeline → Build → Test → Deploy → Running Service
+```
+
+**Benefits of Direct Deployment:**
+- ⚡ **Immediate feedback**: Services available in seconds
+- 🔄 **Rapid iteration**: Perfect for development and prototyping  
+- 🎯 **Simplified setup**: No external CI/CD infrastructure required
+- 📍 **Local development**: Ideal for learning and experimentation
+
+**Production Considerations:**
+- For production environments, integrate with your CI/CD pipeline (Jenkins, GitHub Actions, etc.)
+- Use this setup for development, testing, and proof-of-concepts
+- Consider security implications of direct Docker socket access
+
+### Project Structure
+
 - **Deployment Configs**:
   - `backstage/minikube/` - Local development with Minikube
   - `backstage/kubernetes/` - K8s manifests for dev, test, stage, prod environments
