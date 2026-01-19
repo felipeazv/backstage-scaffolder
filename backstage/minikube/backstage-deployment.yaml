@@ -4,6 +4,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: scaffolder-deployer
+  namespace: backstage
   labels:
     app: scaffolder-service
 
@@ -37,7 +38,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: scaffolder-deployer
-  namespace: default
+  namespace: backstage
 
 ---
 # Scaffolder Service with GitHub integration
@@ -45,6 +46,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: scaffolder-service
+  namespace: backstage
   labels:
     app: scaffolder-service
 spec:
@@ -111,6 +113,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: scaffolder-service
+  namespace: backstage
   labels:
     app: scaffolder-service
 spec:
@@ -130,6 +133,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backstage
+  namespace: backstage
   labels:
     app: backstage
 spec:
@@ -165,6 +169,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: backstage-service
+  namespace: backstage
   labels:
     app: backstage
 spec:
