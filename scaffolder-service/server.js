@@ -1263,7 +1263,12 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
   const results = {
     serviceName,
     github: { deleted: false, error: null },
-    kubernetes: { deployment: false, service: false, error: null },
+    kubernetes: { 
+      deployment: false, 
+      service: false, 
+      postgres: { statefulset: false, service: false, secret: false, pvc: false },
+      error: null 
+    },
     localStorage: { deleted: false, error: null }
   };
   
@@ -1287,8 +1292,12 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       if (fs.existsSync(metaPath)) {
         const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
         if (meta && meta.namespace) nsArg = `-n ${meta.namespace}`;
+      } else {
+        // Default to development namespace if metadata not found
+        nsArg = '-n development';
       }
 
+      // Delete main service resources
       await execAsync(`kubectl delete deployment ${serviceName} ${nsArg} --ignore-not-found=true`);
       results.kubernetes.deployment = true;
       console.log(`[CLEANUP] Deleted K8s deployment: ${serviceName} ${nsArg}`);
@@ -1296,6 +1305,40 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       await execAsync(`kubectl delete service ${serviceName}-service ${nsArg} --ignore-not-found=true`);
       results.kubernetes.service = true;
       console.log(`[CLEANUP] Deleted K8s service: ${serviceName}-service ${nsArg}`);
+      
+      // Delete PostgreSQL resources if they exist
+      try {
+        await execAsync(`kubectl delete statefulset ${serviceName}-postgres ${nsArg} --ignore-not-found=true`);
+        results.kubernetes.postgres.statefulset = true;
+        console.log(`[CLEANUP] Deleted PostgreSQL StatefulSet: ${serviceName}-postgres ${nsArg}`);
+      } catch (error) {
+        console.log(`[CLEANUP] PostgreSQL StatefulSet deletion info: ${error.message}`);
+      }
+      
+      try {
+        await execAsync(`kubectl delete service ${serviceName}-postgres-service ${nsArg} --ignore-not-found=true`);
+        results.kubernetes.postgres.service = true;
+        console.log(`[CLEANUP] Deleted PostgreSQL Service: ${serviceName}-postgres-service ${nsArg}`);
+      } catch (error) {
+        console.log(`[CLEANUP] PostgreSQL Service deletion info: ${error.message}`);
+      }
+      
+      try {
+        await execAsync(`kubectl delete secret ${serviceName}-postgres-secret ${nsArg} --ignore-not-found=true`);
+        results.kubernetes.postgres.secret = true;
+        console.log(`[CLEANUP] Deleted PostgreSQL Secret: ${serviceName}-postgres-secret ${nsArg}`);
+      } catch (error) {
+        console.log(`[CLEANUP] PostgreSQL Secret deletion info: ${error.message}`);
+      }
+      
+      try {
+        await execAsync(`kubectl delete pvc ${serviceName}-postgres-storage ${nsArg} --ignore-not-found=true`);
+        results.kubernetes.postgres.pvc = true;
+        console.log(`[CLEANUP] Deleted PostgreSQL PVC: ${serviceName}-postgres-storage ${nsArg}`);
+      } catch (error) {
+        console.log(`[CLEANUP] PostgreSQL PVC deletion info: ${error.message}`);
+      }
+      
     } catch (error) {
       results.kubernetes.error = error.message;
     }
@@ -1329,7 +1372,11 @@ app.delete('/api/cleanup-all', async (req, res) => {
   const results = {
     servicesFound: [],
     github: { deleted: [], errors: [] },
-    kubernetes: { deleted: [], errors: [] },
+    kubernetes: { 
+      deleted: [], 
+      postgres: { deleted: [], errors: [] },
+      errors: [] 
+    },
     localStorage: { deleted: [], errors: [] }
   };
   
@@ -1364,12 +1411,40 @@ app.delete('/api/cleanup-all', async (req, res) => {
           if (fs.existsSync(metaPath)) {
             const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
             if (meta && meta.namespace) nsArg = `-n ${meta.namespace}`;
+          } else {
+            // Default to development namespace if metadata not found
+            nsArg = '-n development';
           }
 
+          // Delete main service resources
           await execAsync(`kubectl delete deployment ${serviceName} ${nsArg} --ignore-not-found=true`);
           await execAsync(`kubectl delete service ${serviceName}-service ${nsArg} --ignore-not-found=true`);
           results.kubernetes.deleted.push(serviceName);
-          console.log(`[CLEANUP-ALL] Deleted K8s resources: ${serviceName} ${nsArg}`);
+          console.log(`[CLEANUP-ALL] Deleted K8s main resources: ${serviceName} ${nsArg}`);
+          
+          // Delete PostgreSQL resources if they exist
+          const pgResources = [
+            `statefulset ${serviceName}-postgres`,
+            `service ${serviceName}-postgres-service`,
+            `secret ${serviceName}-postgres-secret`,
+            `pvc ${serviceName}-postgres-storage`
+          ];
+          
+          let pgDeleted = false;
+          for (const resource of pgResources) {
+            try {
+              await execAsync(`kubectl delete ${resource} ${nsArg} --ignore-not-found=true`);
+              pgDeleted = true;
+            } catch (error) {
+              // Continue with other resources
+            }
+          }
+          
+          if (pgDeleted) {
+            results.kubernetes.postgres.deleted.push(serviceName);
+            console.log(`[CLEANUP-ALL] Deleted PostgreSQL resources: ${serviceName} ${nsArg}`);
+          }
+          
         } catch (error) {
           results.kubernetes.errors.push({ service: serviceName, error: error.message });
         }
