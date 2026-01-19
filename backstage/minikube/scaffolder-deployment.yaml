@@ -20,7 +20,7 @@ spec:
       serviceAccountName: scaffolder-deployer
       containers:
       - name: scaffolder-service
-        image: scaffolder-service:v7
+        image: scaffolder-service:v8
         imagePullPolicy: Never
         env:
         - name: GITHUB_TOKEN

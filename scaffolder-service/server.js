@@ -1316,9 +1316,9 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       }
       
       try {
-        await execAsync(`kubectl delete service ${serviceName}-postgres-service ${nsArg} --ignore-not-found=true`);
+        await execAsync(`kubectl delete service ${serviceName}-postgres ${nsArg} --ignore-not-found=true`);
         results.kubernetes.postgres.service = true;
-        console.log(`[CLEANUP] Deleted PostgreSQL Service: ${serviceName}-postgres-service ${nsArg}`);
+        console.log(`[CLEANUP] Deleted PostgreSQL Service: ${serviceName}-postgres ${nsArg}`);
       } catch (error) {
         console.log(`[CLEANUP] PostgreSQL Service deletion info: ${error.message}`);
       }
@@ -1332,9 +1332,10 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       }
       
       try {
-        await execAsync(`kubectl delete pvc ${serviceName}-postgres-storage ${nsArg} --ignore-not-found=true`);
+        // StatefulSet PVCs follow pattern: postgres-storage-{statefulset-name}-{ordinal}
+        await execAsync(`kubectl delete pvc postgres-storage-${serviceName}-postgres-0 ${nsArg} --ignore-not-found=true`);
         results.kubernetes.postgres.pvc = true;
-        console.log(`[CLEANUP] Deleted PostgreSQL PVC: ${serviceName}-postgres-storage ${nsArg}`);
+        console.log(`[CLEANUP] Deleted PostgreSQL PVC: postgres-storage-${serviceName}-postgres-0 ${nsArg}`);
       } catch (error) {
         console.log(`[CLEANUP] PostgreSQL PVC deletion info: ${error.message}`);
       }
@@ -1425,9 +1426,9 @@ app.delete('/api/cleanup-all', async (req, res) => {
           // Delete PostgreSQL resources if they exist
           const pgResources = [
             `statefulset ${serviceName}-postgres`,
-            `service ${serviceName}-postgres-service`,
+            `service ${serviceName}-postgres`,
             `secret ${serviceName}-postgres-secret`,
-            `pvc ${serviceName}-postgres-storage`
+            `pvc postgres-storage-${serviceName}-postgres-0`
           ];
           
           let pgDeleted = false;
