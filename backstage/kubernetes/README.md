@@ -2,6 +2,8 @@
 
 This directory contains Kubernetes manifests for deploying Backstage and the Scaffolder Service to any Kubernetes cluster across different environments (development, test, staging, production).
 
+> **🏗️ Namespace Architecture**: Uses multi-namespace setup with `backstage` namespace for platform services and `development` namespace for generated microservices. Includes cross-namespace RBAC for secure service deployment.
+
 ## Key Differences from Minikube
 
 | Feature | Minikube | Kubernetes Cluster |
@@ -15,9 +17,10 @@ This directory contains Kubernetes manifests for deploying Backstage and the Sca
 | **TLS/HTTPS** | No | Yes (via Ingress) |
 | **Monitoring** | kubectl logs | Prometheus, Grafana, Cloud Logging |
 | **Environments** | Local dev only | Dev, test, stage, prod |
+| **Namespace Isolation** | ✅ backstage + development | ✅ backstage + development |
 
 ## Prerequisites
-Kubernetes cluster** (GKE, EKS, AKS, or self-managed)
+- **Kubernetes cluster** (GKE, EKS, AKS, or self-managed)
 2. **kubectl** configured to access your cluster
 3. **Container Registry** access (Docker Hub, GCR, ECR, ACR)
 4. **Domain name** for Ingress (for prod/staging environments)

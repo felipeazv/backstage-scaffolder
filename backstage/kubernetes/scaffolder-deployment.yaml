@@ -1,4 +1,13 @@
 ---
+# Namespace setup for backstage platform architecture
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backstage
+  labels:
+    purpose: platform-services
+
+---
 # Scaffolder Service Deployment for Kubernetes Clusters
 # Suitable for dev, test, stage, and production environments
 # NOTE: This version removes Docker socket mounting for security
@@ -7,6 +16,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: scaffolder-service
+  namespace: backstage
   labels:
     app: scaffolder-service
     environment: production
@@ -37,8 +47,8 @@ spec:
         # Examples: 
         #   - docker.io/yourorg/scaffolder-service:v1.0.0
         #   - gcr.io/your-project/scaffolder-service:v1.0.0
-        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v1.0.0
-        image: YOUR_REGISTRY/scaffolder-service:latest
+        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v14
+        image: YOUR_REGISTRY/scaffolder-service:v14
         imagePullPolicy: Always
         env:
         - name: GITHUB_TOKEN
@@ -102,6 +112,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: scaffolder-service
+  namespace: backstage
   labels:
     app: scaffolder-service
     environment: production
@@ -121,6 +132,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: scaffolder-deployer
+  namespace: backstage
   labels:
     app: scaffolder-service
     environment: production
@@ -156,4 +168,51 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: scaffolder-deployer
-  namespace: default  # CHANGE THIS to your namespace
+  namespace: backstage  # Updated for backstage namespace
+
+---
+# IMPORTANT: Development Namespace Cross-Namespace RBAC
+# Create development namespace and RBAC for scaffolder to deploy services there
+# This is required for the namespace isolation architecture
+
+# Development namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: development
+  labels:
+    purpose: generated-services
+
+---
+# Role for scaffolder to deploy services in development namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: development
+  name: scaffolder-deployer
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["create", "update", "get", "list", "watch", "delete"]
+- apiGroups: [""]
+  resources: ["services", "pods"]
+  verbs: ["create", "update", "get", "list", "watch", "delete"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get", "list"]
+
+---
+# RoleBinding for cross-namespace deployment
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaffolder-deployer-binding
+  namespace: development
+subjects:
+- kind: ServiceAccount
+  name: scaffolder-deployer
+  namespace: backstage
+roleRef:
+  kind: Role
+  name: scaffolder-deployer
+  apiGroup: rbac.authorization.k8s.io
