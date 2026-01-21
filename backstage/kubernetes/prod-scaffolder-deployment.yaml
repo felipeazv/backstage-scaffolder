@@ -1,0 +1,145 @@
+---
+# Production Scaffolder Service Deployment
+# Deploys to backstage-prod namespace and targets stage namespace for services
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaffolder-service
+  namespace: backstage-prod
+  labels:
+    app: scaffolder-service
+    environment: production
+spec:
+  replicas: 2  # High availability for production
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: scaffolder-service
+  template:
+    metadata:
+      labels:
+        app: scaffolder-service
+        environment: production
+    spec:
+      serviceAccountName: scaffolder-deployer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: scaffolder-service
+        # CHANGE THIS: Use your container registry
+        # Examples: 
+        #   - docker.io/yourorg/scaffolder-service:v9
+        #   - gcr.io/your-project/scaffolder-service:v9
+        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v9
+        image: scaffolder-service:v16  # For minikube testing - change for production
+        imagePullPolicy: IfNotPresent  # For minikube testing - change to Always for production
+        env:
+        # CRITICAL: This tells the service to deploy to 'stage' instead of 'development'
+        - name: TARGET_NAMESPACE
+          value: "stage"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: GITHUB_OWNER
+          valueFrom:
+            configMapKeyRef:
+              name: scaffolder-config
+              key: GITHUB_OWNER
+        - name: PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: "production"
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: projects-volume
+          mountPath: /projects
+      volumes:
+      - name: projects-volume
+        emptyDir:
+          sizeLimit: 10Gi
+
+---
+# Service for scaffolder-service in backstage-prod
+apiVersion: v1
+kind: Service
+metadata:
+  name: scaffolder-service
+  namespace: backstage-prod
+  labels:
+    app: scaffolder-service
+    environment: production
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: scaffolder-service
+
+---
+# Optional: Ingress for external access (configure based on your ingress controller)
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: scaffolder-service-ingress
+#   namespace: backstage-prod
+#   annotations:
+#     nginx.ingress.kubernetes.io/rewrite-target: /
+# spec:
+#   rules:
+#   - host: scaffolder-prod.your-domain.com
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: scaffolder-service
+#             port:
+#               number: 3000

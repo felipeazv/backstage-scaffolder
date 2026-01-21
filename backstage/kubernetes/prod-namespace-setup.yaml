@@ -1,0 +1,114 @@
+---
+# Production Namespaces for Backstage Platform
+# This file creates backstage-prod and stage namespaces with proper RBAC
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backstage-prod
+  labels:
+    purpose: platform-services
+    environment: production
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stage
+  labels:
+    purpose: application-services
+    environment: staging
+
+---
+# Service Account for scaffolder-service in backstage-prod namespace
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scaffolder-deployer
+  namespace: backstage-prod
+  labels:
+    app: scaffolder-service
+    component: deployer
+
+---
+# ClusterRole for deployment permissions (reused from existing)
+# This gives permissions to deploy to any namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scaffolder-deployer-prod
+  labels:
+    app: scaffolder-service
+    environment: production
+rules:
+# Core resource management in stage namespace
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps", "secrets", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Deployment and StatefulSet management in stage namespace  
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# For scaling operations
+- apiGroups: ["apps"]
+  resources: ["deployments/scale", "statefulsets/scale"]
+  verbs: ["get", "update", "patch"]
+
+# Event reading (for debugging)
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["get", "list", "watch"]
+
+# Namespace operations (to check if stage namespace exists)
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+
+---
+# ClusterRoleBinding for scaffolder-service in backstage-prod
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scaffolder-deployer-prod-binding
+  labels:
+    app: scaffolder-service
+    environment: production
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scaffolder-deployer-prod
+subjects:
+- kind: ServiceAccount
+  name: scaffolder-deployer
+  namespace: backstage-prod
+
+---
+# ConfigMap for non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaffolder-config
+  namespace: backstage-prod
+  labels:
+    app: scaffolder-service
+    component: config
+data:
+  GITHUB_OWNER: felipeazv
+
+---
+# Secret for GitHub token
+# kubectl create secret generic github-token --from-literal=token=YOUR_TOKEN -n backstage-prod
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-token
+  namespace: backstage-prod
+  labels:
+    app: scaffolder-service
+    component: config
+type: Opaque
+data:
+  # Replace this with base64 encoded GitHub token
+  # echo -n "your_github_token" | base64
+  token: YOUR_BASE64_ENCODED_GITHUB_TOKEN_HERE

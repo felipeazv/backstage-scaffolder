@@ -164,6 +164,8 @@ app.post('/api/scaffold', async (req, res) => {
     }
 
     const projectDir = path.join(PROJECTS_DIR, component_id);
+    let githubRepoUrl = null;
+    let githubError = null;
     
     if (fs.existsSync(projectDir)) {
       return res.status(409).json({ 
@@ -185,11 +187,16 @@ app.post('/api/scaffold', async (req, res) => {
     });
 
     // Persist initial scaffold metadata early so deploy can read namespace even
-    // if later steps fail. Force all services to development namespace.
-    const FORCED_TARGET_NAMESPACE = 'development';
+    // if later steps fail. Use environment variable or default to development.
+    const FORCED_TARGET_NAMESPACE = process.env.TARGET_NAMESPACE || 'development';
     console.log(`[DEBUG] FORCED_TARGET_NAMESPACE value: ${FORCED_TARGET_NAMESPACE}`);
+    console.log(`[DEBUG] Environment TARGET_NAMESPACE: ${process.env.TARGET_NAMESPACE || 'not set, using default'}`);
     
-    // Validate and override namespace to development
+    // Use original component name - no prefix needed with labels
+    let prefixedComponentId = component_id;
+    console.log(`[SCAFFOLD] Using component name: ${component_id} for namespace: ${FORCED_TARGET_NAMESPACE}`);
+    
+    // Validate and override namespace to configured target
     if (target_namespace && target_namespace !== FORCED_TARGET_NAMESPACE) {
       console.log(`[SCAFFOLD] Warning: Requested namespace '${target_namespace}' overridden to '${FORCED_TARGET_NAMESPACE}'`);
     }
@@ -235,7 +242,7 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Generate REST Controller
     const controllerClassName = appClassName.replace('Application', 'Controller');
-    const controllerJava = generateController(packageName, controllerClassName, component_id, persistence);
+    const controllerJava = generateController(packageName, controllerClassName, prefixedComponentId, persistence);
     fs.writeFileSync(path.join(srcDir, `${controllerClassName}.java`), controllerJava);
     
     // Generate JPA entity and repository if PostgreSQL is enabled
@@ -249,27 +256,27 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Generate Dockerfile
     if (include_docker) {
-      const dockerfile = generateDockerfile(component_id, java_version);
+      const dockerfile = generateDockerfile(prefixedComponentId, java_version);
       fs.writeFileSync(path.join(projectDir, 'Dockerfile'), dockerfile);
     }
 
     // Generate K8s manifests
     if (include_k8s) {
-      const deployment = generateK8sDeployment(component_id, owner, port, FORCED_TARGET_NAMESPACE, persistence);
+      const deployment = generateK8sDeployment(prefixedComponentId, component_id, owner, port, FORCED_TARGET_NAMESPACE, persistence);
       fs.writeFileSync(path.join(k8sDir, 'deployment.yaml'), deployment);
 
-      const service = generateK8sService(component_id, port, FORCED_TARGET_NAMESPACE);
+      const service = generateK8sService(prefixedComponentId, port, FORCED_TARGET_NAMESPACE);
       fs.writeFileSync(path.join(k8sDir, 'service.yaml'), service);
       
       // Generate PostgreSQL resources if persistence is enabled
       if (persistence === 'postgresql') {
-        const postgresSecret = generatePostgreSQLSecret(component_id, FORCED_TARGET_NAMESPACE);
+        const postgresSecret = generatePostgreSQLSecret(prefixedComponentId, FORCED_TARGET_NAMESPACE);
         fs.writeFileSync(path.join(k8sDir, 'postgres-secret.yaml'), postgresSecret);
         
-        const postgresStatefulSet = generatePostgreSQLStatefulSet(component_id, FORCED_TARGET_NAMESPACE);
+        const postgresStatefulSet = generatePostgreSQLStatefulSet(prefixedComponentId, FORCED_TARGET_NAMESPACE);
         fs.writeFileSync(path.join(k8sDir, 'postgres-statefulset.yaml'), postgresStatefulSet);
         
-        const postgresService = generatePostgreSQLService(component_id, FORCED_TARGET_NAMESPACE);
+        const postgresService = generatePostgreSQLService(prefixedComponentId, FORCED_TARGET_NAMESPACE);
         fs.writeFileSync(path.join(k8sDir, 'postgres-service.yaml'), postgresService);
       }
     }
@@ -303,7 +310,6 @@ app.post('/api/scaffold', async (req, res) => {
     console.log(`[SUCCESS] Project created at ${projectDir}`);
 
     // Create GitHub repository and push code
-    let githubRepoUrl = null;
     if (GITHUB_ENABLED) {
       try {
         githubRepoUrl = await createGitHubRepo(component_id, description);
@@ -311,15 +317,51 @@ app.post('/api/scaffold', async (req, res) => {
         console.log(`[GITHUB] Code pushed to ${githubRepoUrl}`);
       } catch (error) {
         console.error('[GITHUB] GitHub integration failed:', error.message);
+        githubError = error.message;
         // Continue without GitHub - don't fail the entire scaffolding
       }
     }
 
+    // Auto-deploy to Kubernetes if k8s manifests were created
+    let deploymentSuccess = false;
+    let deploymentError = null;
+    
+    if (include_k8s) {
+      try {
+        console.log(`[AUTO-DEPLOY] Starting automatic deployment for ${component_id}`);
+        await deployToKubernetes(component_id, projectDir, FORCED_TARGET_NAMESPACE);
+        deploymentSuccess = true;
+        console.log(`[AUTO-DEPLOY] Successfully deployed ${component_id} to ${FORCED_TARGET_NAMESPACE}`);
+      } catch (error) {
+        console.error('[AUTO-DEPLOY] Deployment failed:', error.message);
+        deploymentError = error.message;
+        // Continue - don't fail scaffolding due to deployment issues
+      }
+    }
+
+    // Prepare response message
+    let responseMessage = `Service ${component_id} scaffolded successfully`;
+    let warnings = [];
+    
+    if (GITHUB_ENABLED && !githubRepoUrl) {
+      warnings.push('GitHub repository creation failed - project created locally only');
+    }
+    
+    if (include_k8s && !deploymentSuccess) {
+      warnings.push(`Kubernetes deployment failed: ${deploymentError || 'unknown error'}`);
+    }
+    
+    if (warnings.length > 0) {
+      responseMessage += ` (Warning: ${warnings.join(', ')})`;
+    }
+
     res.json({
       success: true,
-      message: `Service ${component_id} scaffolded successfully`,
+      message: responseMessage,
       projectPath: projectDir,
       githubRepo: githubRepoUrl,
+      githubError: githubError || null,
+      warnings: warnings,
       files: {
         pom: `${component_id}/pom.xml`,
         dockerfile: include_docker ? `${component_id}/Dockerfile` : null,
@@ -357,6 +399,101 @@ app.post('/api/scaffold', async (req, res) => {
     });
   }
 });
+
+// Automatic deployment function
+async function deployToKubernetes(serviceName, projectDir, namespace) {
+  const { execSync } = require('child_process');
+  
+  console.log(`[DEPLOY] Starting deployment for ${serviceName} to namespace ${namespace}`);
+  
+  const k8sDir = path.join(projectDir, 'k8s');
+  if (!fs.existsSync(k8sDir)) {
+    throw new Error('No k8s directory found');
+  }
+
+  // Use original service name - no prefix needed with labels
+  let prefixedServiceName = serviceName;
+  console.log(`[DEPLOY] Using service name: ${serviceName} for namespace: ${namespace}`);
+
+  const nsArg = namespace ? `-n ${namespace}` : '';
+  
+  // Build and load Docker image if Dockerfile exists
+  const dockerfilePath = path.join(projectDir, 'Dockerfile');
+  if (fs.existsSync(dockerfilePath)) {
+    console.log(`[DEPLOY] Building Docker image for ${serviceName}:v1`);
+    try {
+      execSync(`docker build -t ${serviceName}:v1 "${projectDir}"`, { stdio: 'pipe' });
+      console.log(`[DEPLOY] Loading image into Minikube`);
+      execSync(`minikube image load ${serviceName}:v1`, { stdio: 'pipe' });
+    } catch (error) {
+      console.warn(`[DEPLOY] Docker build/load warning: ${error.message}`);
+      // Continue - deployment may still work with existing images
+    }
+  }
+
+  // Apply PostgreSQL resources first if they exist
+  const postgresFiles = ['postgres-secret.yaml', 'postgres-service.yaml', 'postgres-statefulset.yaml'];
+  for (const file of postgresFiles) {
+    const filePath = path.join(k8sDir, file);
+    if (fs.existsSync(filePath)) {
+      console.log(`[DEPLOY] Applying ${file}`);
+      try {
+        execSync(`kubectl apply ${nsArg} -f "${filePath}"`, { stdio: 'pipe' });
+      } catch (error) {
+        console.error(`[DEPLOY] Failed to apply ${file}: ${error.message}`);
+        throw error;
+      }
+    }
+  }
+
+  // Wait for PostgreSQL to be ready if it was deployed
+  const postgresStatefulSetPath = path.join(k8sDir, 'postgres-statefulset.yaml');
+  if (fs.existsSync(postgresStatefulSetPath)) {
+    console.log(`[DEPLOY] Waiting for PostgreSQL to be ready...`);
+    let pgAttempts = 0;
+    const maxPgAttempts = 20;
+    
+    while (pgAttempts < maxPgAttempts) {
+      try {
+        const pgStatus = execSync(`kubectl get pods ${nsArg} -l app=${serviceName}-postgres -o jsonpath='{.items[0].status.phase}'`, { encoding: 'utf8' });
+        console.log(`[DEPLOY] PostgreSQL pod status: ${pgStatus}`);
+        
+        if (pgStatus.includes('Running')) {
+          console.log(`[DEPLOY] PostgreSQL is running, waiting 5s for readiness`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          break;
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        pgAttempts++;
+      } catch (error) {
+        console.log(`[DEPLOY] Waiting for PostgreSQL... (${pgAttempts}/${maxPgAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        pgAttempts++;
+      }
+    }
+    
+    if (pgAttempts >= maxPgAttempts) {
+      console.warn(`[DEPLOY] PostgreSQL readiness timeout, continuing with app deployment`);
+    }
+  }
+
+  // Apply application deployment
+  const deploymentPath = path.join(k8sDir, 'deployment.yaml');
+  if (fs.existsSync(deploymentPath)) {
+    console.log(`[DEPLOY] Applying deployment.yaml`);
+    execSync(`kubectl apply ${nsArg} -f "${deploymentPath}"`, { stdio: 'pipe' });
+  }
+
+  // Apply service
+  const servicePath = path.join(k8sDir, 'service.yaml');
+  if (fs.existsSync(servicePath)) {
+    console.log(`[DEPLOY] Applying service.yaml`);
+    execSync(`kubectl apply ${nsArg} -f "${servicePath}"`, { stdio: 'pipe' });
+  }
+
+  console.log(`[DEPLOY] Deployment completed for ${serviceName}`);
+}
 
 // Template generators
 
@@ -670,8 +807,14 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 `;
 }
 
-function generateK8sDeployment(serviceName, owner, port, namespace, persistence = 'none') {
+function generateK8sDeployment(serviceName, originalServiceName, owner, port, namespace, persistence = 'none') {
   const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  
+  // Determine environment label based on namespace
+  const environmentLabel = namespace === 'development' ? 'development' : 
+                          namespace === 'stage' ? 'stage' : 
+                          namespace === 'backstage-prod' ? 'production' : 
+                          'other';
   
   // PostgreSQL environment variables
   const postgresEnvVars = persistence === 'postgresql' ? `
@@ -700,6 +843,7 @@ metadata:
 ${nsBlock}  labels:
     app: ${serviceName}
     owner: ${owner}
+    environment: ${environmentLabel}
 spec:
   replicas: 2
   selector:
@@ -710,10 +854,11 @@ spec:
       labels:
         app: ${serviceName}
         owner: ${owner}
+        environment: ${environmentLabel}
     spec:
       containers:
       - name: ${serviceName}
-        image: ${serviceName}:v1
+        image: ${originalServiceName}:v1
         imagePullPolicy: Never
         ports:
         - containerPort: ${port}
@@ -744,12 +889,20 @@ spec:
 
 function generateK8sService(serviceName, port, namespace) {
   const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  
+  // Determine environment label based on namespace
+  const environmentLabel = namespace === 'development' ? 'development' : 
+                          namespace === 'stage' ? 'stage' : 
+                          namespace === 'backstage-prod' ? 'production' : 
+                          'other';
+  
   return `apiVersion: v1
 kind: Service
 metadata:
   name: ${serviceName}-service
 ${nsBlock}  labels:
     app: ${serviceName}
+    environment: ${environmentLabel}
 spec:
   type: NodePort
   ports:
@@ -1288,54 +1441,64 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
     // Delete Kubernetes resources (respect namespace if present)
     try {
       let nsArg = '';
+      let namespace = '';
       const metaPath = path.join(PROJECTS_DIR, serviceName, 'scaffold-metadata.json');
       if (fs.existsSync(metaPath)) {
         const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-        if (meta && meta.namespace) nsArg = `-n ${meta.namespace}`;
+        if (meta && meta.namespace) {
+          namespace = meta.namespace;
+          nsArg = `-n ${namespace}`;
+        }
       } else {
-        // Default to development namespace if metadata not found
-        nsArg = '-n development';
+        // Default to configured target namespace if metadata not found
+        namespace = process.env.TARGET_NAMESPACE || 'development';
+        nsArg = `-n ${namespace}`;
       }
 
-      // Delete main service resources
-      await execAsync(`kubectl delete deployment ${serviceName} ${nsArg} --ignore-not-found=true`);
-      results.kubernetes.deployment = true;
-      console.log(`[CLEANUP] Deleted K8s deployment: ${serviceName} ${nsArg}`);
+      // Use original service names - no prefixes with label-based approach
+      let deploymentName = serviceName;
+      let serviceResourceName = serviceName;
+      console.log(`[CLEANUP] Using service name: ${serviceName} in namespace: ${namespace}`);
 
-      await execAsync(`kubectl delete service ${serviceName}-service ${nsArg} --ignore-not-found=true`);
+      // Delete main service resources
+      await execAsync(`kubectl delete deployment ${deploymentName} ${nsArg} --ignore-not-found=true`);
+      results.kubernetes.deployment = true;
+      console.log(`[CLEANUP] Deleted K8s deployment: ${deploymentName} ${nsArg}`);
+
+      await execAsync(`kubectl delete service ${serviceResourceName}-service ${nsArg} --ignore-not-found=true`);
       results.kubernetes.service = true;
-      console.log(`[CLEANUP] Deleted K8s service: ${serviceName}-service ${nsArg}`);
+      console.log(`[CLEANUP] Deleted K8s service: ${serviceResourceName}-service ${nsArg}`);
       
       // Delete PostgreSQL resources if they exist
       try {
-        await execAsync(`kubectl delete statefulset ${serviceName}-postgres ${nsArg} --ignore-not-found=true`);
+        await execAsync(`kubectl delete statefulset ${serviceResourceName}-postgres ${nsArg} --ignore-not-found=true`);
         results.kubernetes.postgres.statefulset = true;
-        console.log(`[CLEANUP] Deleted PostgreSQL StatefulSet: ${serviceName}-postgres ${nsArg}`);
+        console.log(`[CLEANUP] Deleted PostgreSQL StatefulSet: ${serviceResourceName}-postgres ${nsArg}`);
       } catch (error) {
         console.log(`[CLEANUP] PostgreSQL StatefulSet deletion info: ${error.message}`);
       }
       
       try {
-        await execAsync(`kubectl delete service ${serviceName}-postgres ${nsArg} --ignore-not-found=true`);
+        await execAsync(`kubectl delete service ${serviceResourceName}-postgres ${nsArg} --ignore-not-found=true`);
         results.kubernetes.postgres.service = true;
-        console.log(`[CLEANUP] Deleted PostgreSQL Service: ${serviceName}-postgres ${nsArg}`);
+        console.log(`[CLEANUP] Deleted PostgreSQL Service: ${serviceResourceName}-postgres ${nsArg}`);
       } catch (error) {
         console.log(`[CLEANUP] PostgreSQL Service deletion info: ${error.message}`);
       }
       
       try {
-        await execAsync(`kubectl delete secret ${serviceName}-postgres-secret ${nsArg} --ignore-not-found=true`);
+        await execAsync(`kubectl delete secret ${serviceResourceName}-postgres-secret ${nsArg} --ignore-not-found=true`);
         results.kubernetes.postgres.secret = true;
-        console.log(`[CLEANUP] Deleted PostgreSQL Secret: ${serviceName}-postgres-secret ${nsArg}`);
+        console.log(`[CLEANUP] Deleted PostgreSQL Secret: ${serviceResourceName}-postgres-secret ${nsArg}`);
       } catch (error) {
         console.log(`[CLEANUP] PostgreSQL Secret deletion info: ${error.message}`);
       }
       
       try {
         // StatefulSet PVCs follow pattern: postgres-storage-{statefulset-name}-{ordinal}
-        await execAsync(`kubectl delete pvc postgres-storage-${serviceName}-postgres-0 ${nsArg} --ignore-not-found=true`);
+        await execAsync(`kubectl delete pvc postgres-storage-${serviceResourceName}-postgres-0 ${nsArg} --ignore-not-found=true`);
         results.kubernetes.postgres.pvc = true;
-        console.log(`[CLEANUP] Deleted PostgreSQL PVC: postgres-storage-${serviceName}-postgres-0 ${nsArg}`);
+        console.log(`[CLEANUP] Deleted PostgreSQL PVC: postgres-storage-${serviceResourceName}-postgres-0 ${nsArg}`);
       } catch (error) {
         console.log(`[CLEANUP] PostgreSQL PVC deletion info: ${error.message}`);
       }
@@ -1408,27 +1571,37 @@ app.delete('/api/cleanup-all', async (req, res) => {
         // Delete Kubernetes resources (respect namespace if present)
         try {
           let nsArg = '';
+          let namespace = '';
           const metaPath = path.join(PROJECTS_DIR, serviceName, 'scaffold-metadata.json');
           if (fs.existsSync(metaPath)) {
             const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-            if (meta && meta.namespace) nsArg = `-n ${meta.namespace}`;
+            if (meta && meta.namespace) {
+              namespace = meta.namespace;
+              nsArg = `-n ${namespace}`;
+            }
           } else {
-            // Default to development namespace if metadata not found
-            nsArg = '-n development';
+            // Default to configured target namespace if metadata not found
+            namespace = process.env.TARGET_NAMESPACE || 'development';
+            nsArg = `-n ${namespace}`;
           }
 
+          // Use original service names - no prefixes with label-based approach
+          let deploymentName = serviceName;
+          let serviceResourceName = serviceName;
+          console.log(`[CLEANUP-ALL] Using service name: ${serviceName} in namespace: ${namespace}`);
+
           // Delete main service resources
-          await execAsync(`kubectl delete deployment ${serviceName} ${nsArg} --ignore-not-found=true`);
-          await execAsync(`kubectl delete service ${serviceName}-service ${nsArg} --ignore-not-found=true`);
+          await execAsync(`kubectl delete deployment ${deploymentName} ${nsArg} --ignore-not-found=true`);
+          await execAsync(`kubectl delete service ${serviceResourceName}-service ${nsArg} --ignore-not-found=true`);
           results.kubernetes.deleted.push(serviceName);
-          console.log(`[CLEANUP-ALL] Deleted K8s main resources: ${serviceName} ${nsArg}`);
+          console.log(`[CLEANUP-ALL] Deleted K8s main resources: ${deploymentName} ${nsArg}`);
           
           // Delete PostgreSQL resources if they exist
           const pgResources = [
-            `statefulset ${serviceName}-postgres`,
-            `service ${serviceName}-postgres`,
-            `secret ${serviceName}-postgres-secret`,
-            `pvc postgres-storage-${serviceName}-postgres-0`
+            `statefulset ${serviceResourceName}-postgres`,
+            `service ${serviceResourceName}-postgres`,
+            `secret ${serviceResourceName}-postgres-secret`,
+            `pvc postgres-storage-${serviceResourceName}-postgres-0`
           ];
           
           let pgDeleted = false;
@@ -1443,7 +1616,7 @@ app.delete('/api/cleanup-all', async (req, res) => {
           
           if (pgDeleted) {
             results.kubernetes.postgres.deleted.push(serviceName);
-            console.log(`[CLEANUP-ALL] Deleted PostgreSQL resources: ${serviceName} ${nsArg}`);
+            console.log(`[CLEANUP-ALL] Deleted PostgreSQL resources: ${serviceResourceName} ${nsArg}`);
           }
           
         } catch (error) {
@@ -1480,11 +1653,21 @@ app.delete('/api/cleanup-all', async (req, res) => {
 // PostgreSQL Kubernetes Resource Generators
 function generatePostgreSQLSecret(serviceName, namespace) {
   const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  
+  // Determine environment label based on namespace
+  const environmentLabel = namespace === 'development' ? 'development' : 
+                          namespace === 'stage' ? 'stage' : 
+                          namespace === 'backstage-prod' ? 'production' : 
+                          'other';
+  
   return `apiVersion: v1
 kind: Secret
 metadata:
   name: ${serviceName}-postgres-secret
-${nsBlock}type: Opaque
+${nsBlock}  labels:
+    app: ${serviceName}-postgres
+    environment: ${environmentLabel}
+type: Opaque
 data:
   username: ${Buffer.from(serviceName).toString('base64')}
   password: ${Buffer.from('password').toString('base64')}
@@ -1493,12 +1676,20 @@ data:
 
 function generatePostgreSQLStatefulSet(serviceName, namespace) {
   const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  
+  // Determine environment label based on namespace
+  const environmentLabel = namespace === 'development' ? 'development' : 
+                          namespace === 'stage' ? 'stage' : 
+                          namespace === 'backstage-prod' ? 'production' : 
+                          'other';
+  
   return `apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: ${serviceName}-postgres
 ${nsBlock}  labels:
     app: ${serviceName}-postgres
+    environment: ${environmentLabel}
 spec:
   serviceName: ${serviceName}-postgres
   replicas: 1
@@ -1509,6 +1700,7 @@ spec:
     metadata:
       labels:
         app: ${serviceName}-postgres
+        environment: ${environmentLabel}
     spec:
       containers:
       - name: postgres
@@ -1555,12 +1747,20 @@ spec:
 
 function generatePostgreSQLService(serviceName, namespace) {
   const nsBlock = namespace ? `  namespace: ${namespace}\n` : '';
+  
+  // Determine environment label based on namespace
+  const environmentLabel = namespace === 'development' ? 'development' : 
+                          namespace === 'stage' ? 'stage' : 
+                          namespace === 'backstage-prod' ? 'production' : 
+                          'other';
+  
   return `apiVersion: v1
 kind: Service
 metadata:
   name: ${serviceName}-postgres
 ${nsBlock}  labels:
     app: ${serviceName}-postgres
+    environment: ${environmentLabel}
 spec:
   type: ClusterIP
   ports:
