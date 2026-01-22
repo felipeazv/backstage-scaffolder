@@ -300,9 +300,33 @@ async function pushToGitHub(projectDir, repoName, commitMessage) {
     const publicUrl = `https://github.com/${GITHUB_OWNER}/${repoName}.git`;
     console.log(`[GITHUB] Initializing git in ${projectDir}`);
     
-    // Initialize git repo
+    // Initialize git repo and configure user
     execSync('git init', { cwd: projectDir, stdio: 'pipe' });
+    execSync('git config user.name "Backstage Scaffolder"', { cwd: projectDir, stdio: 'pipe' });
+    execSync('git config user.email "scaffolder@backstage.io"', { cwd: projectDir, stdio: 'pipe' });
+    
+    // Check if there are any files to add
+    const gitStatusOutput = execSync('git status --porcelain', { cwd: projectDir, encoding: 'utf8' });
+    console.log(`[GITHUB] Git status output: ${gitStatusOutput.trim()}`);
+    
+    if (!gitStatusOutput.trim()) {
+      console.log('[GITHUB] Warning: No files to commit - directory might be empty');
+      // List files in the directory for debugging
+      const files = fs.readdirSync(projectDir);
+      console.log(`[GITHUB] Directory contents: ${files.join(', ')}`);
+    }
+    
+    // Add all files and commit
     execSync('git add .', { cwd: projectDir, stdio: 'pipe' });
+    
+    // Verify files were added (use git diff --staged for better compatibility)
+    const gitAddStatus = execSync('git diff --staged --name-only', { cwd: projectDir, encoding: 'utf8' });
+    console.log(`[GITHUB] Files staged for commit: ${gitAddStatus.trim()}`);
+    
+    if (!gitAddStatus.trim()) {
+      throw new Error('No files were staged for commit - check .gitignore or file permissions');
+    }
+    
     execSync(`git commit -m "${commitMessage}"`, { cwd: projectDir, stdio: 'pipe' });
     
     // Add remote and push

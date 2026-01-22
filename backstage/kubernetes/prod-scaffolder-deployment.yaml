@@ -37,8 +37,8 @@ spec:
         #   - docker.io/yourorg/scaffolder-service:v9
         #   - gcr.io/your-project/scaffolder-service:v9
         #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v9
-        image: scaffolder-service:v16  # For minikube testing - change for production
-        imagePullPolicy: IfNotPresent  # For minikube testing - change to Always for production
+        image: YOUR_REGISTRY/scaffolder-service:v21  # CHANGE: Use your container registry
+        imagePullPolicy: Always  # Always pull latest for production
         env:
         # CRITICAL: This tells the service to deploy to 'stage' instead of 'development'
         - name: TARGET_NAMESPACE
@@ -53,6 +53,26 @@ spec:
             configMapKeyRef:
               name: scaffolder-config
               key: GITHUB_OWNER
+        # PostgreSQL catalog database configuration
+        - name: POSTGRES_HOST
+          value: "postgres-catalog.backstage.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: postgres-catalog-credentials
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-catalog-credentials
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-catalog-credentials
+              key: POSTGRES_PASSWORD
         - name: PORT
           value: "3000"
         - name: NODE_ENV

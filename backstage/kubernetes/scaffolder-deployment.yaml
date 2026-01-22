@@ -47,8 +47,8 @@ spec:
         # Examples: 
         #   - docker.io/yourorg/scaffolder-service:v8
         #   - gcr.io/your-project/scaffolder-service:v8
-        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v8
-        image: YOUR_REGISTRY/scaffolder-service:v8
+        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v21
+        image: YOUR_REGISTRY/scaffolder-service:v21
         imagePullPolicy: Always
         env:
         - name: GITHUB_TOKEN
@@ -57,7 +57,27 @@ spec:
               name: github-token
               key: token
         - name: GITHUB_OWNER
-          value: "YOUR_GITHUB_USERNAME"  # CHANGE THIS to your GitHub username or organization  # CHANGE THIS to your GitHub org/user
+          value: "YOUR_GITHUB_USERNAME"  # CHANGE THIS to your GitHub username or organization
+        # PostgreSQL catalog database configuration
+        - name: POSTGRES_HOST
+          value: "postgres-catalog.backstage.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: postgres-catalog-credentials
+              key: POSTGRES_DB
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-catalog-credentials
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-catalog-credentials
+              key: POSTGRES_PASSWORD
         - name: PORT
           value: "3000"
         - name: NODE_ENV

@@ -1,0 +1,356 @@
+---
+# PostgreSQL Catalog Database for Production Kubernetes Environments
+# Suitable for dev, test, staging, and production clusters
+# Features: High Availability, Persistent Storage, Security, Resource Management
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-catalog-credentials
+  namespace: backstage
+  labels:
+    app: postgres-catalog
+    component: database
+type: Opaque
+data:
+  # Base64 encoded values - CHANGE THESE IN PRODUCTION!
+  # Default values (change for production):
+  #   POSTGRES_DB: backstage_catalog
+  #   POSTGRES_USER: backstage  
+  #   POSTGRES_PASSWORD: change-me-in-production
+  POSTGRES_DB: YmFja3N0YWdlX2NhdGFsb2c=
+  POSTGRES_USER: YmFja3N0YWdl
+  POSTGRES_PASSWORD: Y2hhbmdlLW1lLWluLXByb2R1Y3Rpb24=
+
+---
+# PostgreSQL ConfigMap with initialization scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-catalog-init
+  namespace: backstage
+  labels:
+    app: postgres-catalog
+    component: database
+data:
+  01-init-schema.sql: |
+    -- Backstage Catalog Database Schema for Production
+    -- Based on Backstage Entity Specification v1alpha1
+    -- Optimized for multi-tenant, high-performance catalog operations
+    
+    -- Enable required extensions
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- For fuzzy text search
+    
+    -- Create entities table with enhanced indexing for production
+    CREATE TABLE entities (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_ref VARCHAR(512) UNIQUE NOT NULL, -- namespace/kind:name format
+        api_version VARCHAR(50) NOT NULL DEFAULT 'backstage.io/v1alpha1',
+        kind VARCHAR(50) NOT NULL, -- Component, API, Resource, System, Domain, etc.
+        namespace VARCHAR(63) NOT NULL DEFAULT 'default',
+        name VARCHAR(63) NOT NULL,
+        metadata JSONB NOT NULL, -- Full metadata object (title, description, annotations, labels, etc.)
+        spec JSONB, -- Spec object (type, lifecycle, owner, etc.)
+        relations JSONB, -- Array of relations (dependsOn, ownedBy, etc.)
+        final_entity JSONB NOT NULL, -- Complete processed entity
+        originating_location JSONB, -- Source location info
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        -- Add constraints for data integrity
+        CONSTRAINT valid_namespace CHECK (namespace ~ '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'),
+        CONSTRAINT valid_name CHECK (name ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'),
+        CONSTRAINT valid_kind CHECK (kind IN ('Component', 'API', 'Resource', 'System', 'Domain', 'Group', 'User', 'Location'))
+    );
+    
+    -- Create comprehensive indexes for production performance
+    CREATE INDEX idx_entities_kind ON entities(kind);
+    CREATE INDEX idx_entities_namespace ON entities(namespace);
+    CREATE INDEX idx_entities_name ON entities(name);
+    CREATE INDEX idx_entities_kind_namespace ON entities(kind, namespace);
+    CREATE INDEX idx_entities_created_at ON entities(created_at);
+    CREATE INDEX idx_entities_updated_at ON entities(updated_at);
+    
+    -- Advanced JSONB indexes for metadata queries
+    CREATE INDEX idx_entities_metadata_gin ON entities USING gin(metadata);
+    CREATE INDEX idx_entities_spec_gin ON entities USING gin(spec);
+    CREATE INDEX idx_entities_relations_gin ON entities USING gin(relations);
+    
+    -- Specific indexes for common catalog queries
+    CREATE INDEX idx_entities_metadata_labels ON entities USING gin((metadata->'labels'));
+    CREATE INDEX idx_entities_metadata_annotations ON entities USING gin((metadata->'annotations'));
+    CREATE INDEX idx_entities_spec_owner ON entities USING gin((spec->'owner'));
+    CREATE INDEX idx_entities_spec_type ON entities USING gin((spec->'type'));
+    CREATE INDEX idx_entities_spec_lifecycle ON entities USING gin((spec->'lifecycle'));
+    
+    -- Text search indexes for entity discovery
+    CREATE INDEX idx_entities_name_trgm ON entities USING gin(name gin_trgm_ops);
+    CREATE INDEX idx_entities_desc_trgm ON entities USING gin((metadata->>'description') gin_trgm_ops);
+    
+    -- Create entity relations table for relationship management
+    CREATE TABLE entity_relations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        source_entity_ref VARCHAR(512) NOT NULL,
+        target_entity_ref VARCHAR(512) NOT NULL,
+        relation_type VARCHAR(50) NOT NULL, -- dependsOn, ownedBy, partOf, etc.
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        FOREIGN KEY (source_entity_ref) REFERENCES entities(entity_ref) ON DELETE CASCADE,
+        UNIQUE(source_entity_ref, target_entity_ref, relation_type)
+    );
+    
+    CREATE INDEX idx_relations_source ON entity_relations(source_entity_ref);
+    CREATE INDEX idx_relations_target ON entity_relations(target_entity_ref);
+    CREATE INDEX idx_relations_type ON entity_relations(relation_type);
+    CREATE INDEX idx_relations_source_type ON entity_relations(source_entity_ref, relation_type);
+    
+    -- Create locations table for tracking entity sources
+    CREATE TABLE entity_locations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_ref VARCHAR(512) NOT NULL,
+        location_type VARCHAR(50) NOT NULL, -- url, file, scaffolder, git, etc.
+        location_target TEXT NOT NULL, -- URL, file path, repository, etc.
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        FOREIGN KEY (entity_ref) REFERENCES entities(entity_ref) ON DELETE CASCADE
+    );
+    
+    CREATE INDEX idx_locations_entity_ref ON entity_locations(entity_ref);
+    CREATE INDEX idx_locations_type ON entity_locations(location_type);
+    CREATE INDEX idx_locations_target ON entity_locations(location_target);
+    
+    -- Create audit log table for catalog changes
+    CREATE TABLE entity_audit_log (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_ref VARCHAR(512) NOT NULL,
+        operation VARCHAR(20) NOT NULL, -- INSERT, UPDATE, DELETE
+        old_entity JSONB,
+        new_entity JSONB,
+        changed_by VARCHAR(255),
+        changed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    
+    CREATE INDEX idx_audit_entity_ref ON entity_audit_log(entity_ref);
+    CREATE INDEX idx_audit_changed_at ON entity_audit_log(changed_at);
+    CREATE INDEX idx_audit_operation ON entity_audit_log(operation);
+    
+    -- Create function to update the updated_at timestamp
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+    END;
+    $$ language 'plpgsql';
+    
+    -- Create triggers for automatic timestamp updates
+    CREATE TRIGGER update_entities_updated_at BEFORE UPDATE ON entities
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    
+    CREATE TRIGGER update_locations_updated_at BEFORE UPDATE ON entity_locations
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    
+    -- Create audit trigger for entity changes
+    CREATE OR REPLACE FUNCTION audit_entity_changes()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        IF TG_OP = 'DELETE' THEN
+            INSERT INTO entity_audit_log (entity_ref, operation, old_entity, changed_by)
+            VALUES (OLD.entity_ref, 'DELETE', OLD.final_entity, current_user);
+            RETURN OLD;
+        ELSIF TG_OP = 'UPDATE' THEN
+            INSERT INTO entity_audit_log (entity_ref, operation, old_entity, new_entity, changed_by)
+            VALUES (NEW.entity_ref, 'UPDATE', OLD.final_entity, NEW.final_entity, current_user);
+            RETURN NEW;
+        ELSIF TG_OP = 'INSERT' THEN
+            INSERT INTO entity_audit_log (entity_ref, operation, new_entity, changed_by)
+            VALUES (NEW.entity_ref, 'INSERT', NEW.final_entity, current_user);
+            RETURN NEW;
+        END IF;
+        RETURN NULL;
+    END;
+    $$ language 'plpgsql';
+    
+    CREATE TRIGGER entity_audit_trigger
+        AFTER INSERT OR UPDATE OR DELETE ON entities
+        FOR EACH ROW EXECUTE FUNCTION audit_entity_changes();
+
+  02-production-sample-data.sql: |
+    -- Production-ready sample catalog entities
+    
+    -- Platform Domain
+    INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, final_entity, originating_location) VALUES
+    ('default/domain:platform',
+     'Domain', 
+     'default', 
+     'platform',
+     '{"name": "platform", "description": "Core platform infrastructure and services", "labels": {"environment": "production", "team": "platform"}}',
+     '{"owner": "platform-team"}',
+     '{"apiVersion": "backstage.io/v1alpha1", "kind": "Domain", "metadata": {"name": "platform", "description": "Core platform infrastructure and services", "labels": {"environment": "production", "team": "platform"}}, "spec": {"owner": "platform-team"}}',
+     '{"type": "bootstrap", "target": "catalog-init"}'
+    );
+    
+    -- Microservices System
+    INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, final_entity, originating_location) VALUES
+    ('default/system:microservices-platform',
+     'System',
+     'default',
+     'microservices-platform', 
+     '{"name": "microservices-platform", "description": "Distributed microservices architecture platform", "labels": {"domain": "platform", "architecture": "microservices"}}',
+     '{"owner": "platform-team", "domain": "platform"}',
+     '{"apiVersion": "backstage.io/v1alpha1", "kind": "System", "metadata": {"name": "microservices-platform", "description": "Distributed microservices architecture platform", "labels": {"domain": "platform", "architecture": "microservices"}}, "spec": {"owner": "platform-team", "domain": "platform"}}',
+     '{"type": "bootstrap", "target": "catalog-init"}'
+    );
+
+  03-grant-permissions.sql: |
+    -- Grant comprehensive permissions for production use
+    GRANT ALL PRIVILEGES ON DATABASE backstage_catalog TO backstage;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO backstage;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO backstage;
+    GRANT USAGE ON SCHEMA public TO backstage;
+    
+    -- Grant permissions for future objects
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO backstage;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO backstage;
+    
+    -- Create read-only user for monitoring/analytics (optional)
+    -- CREATE USER backstage_readonly WITH PASSWORD 'readonly-password';
+    -- GRANT CONNECT ON DATABASE backstage_catalog TO backstage_readonly;
+    -- GRANT USAGE ON SCHEMA public TO backstage_readonly;
+    -- GRANT SELECT ON ALL TABLES IN SCHEMA public TO backstage_readonly;
+
+---
+# PostgreSQL StatefulSet for Production
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-catalog
+  namespace: backstage
+  labels:
+    app: postgres-catalog
+    component: database
+spec:
+  serviceName: postgres-catalog
+  replicas: 1  # Single instance for now - can be scaled for HA later
+  selector:
+    matchLabels:
+      app: postgres-catalog
+  template:
+    metadata:
+      labels:
+        app: postgres-catalog
+        component: database
+    spec:
+      securityContext:
+        runAsUser: 999  # postgres user
+        runAsGroup: 999
+        fsGroup: 999
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        envFrom:
+        - secretRef:
+            name: postgres-catalog-credentials
+        env:
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_INITDB_ARGS
+          value: "--auth-local=trust --auth-host=md5"
+        ports:
+        - containerPort: 5432
+          name: postgres
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          timeoutSeconds: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: postgres-catalog-init
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-storage
+      labels:
+        app: postgres-catalog
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      # storageClassName: fast-ssd  # Specify your preferred storage class
+      resources:
+        requests:
+          storage: 20Gi  # Adjust based on expected catalog size
+
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-catalog
+  namespace: backstage
+  labels:
+    app: postgres-catalog
+    component: database
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app: postgres-catalog
+
+---
+# Network Policy for PostgreSQL (optional, for enhanced security)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-catalog-netpol
+  namespace: backstage
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres-catalog
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: scaffolder-service
+    - podSelector:
+        matchLabels:
+          app: backstage
+    ports:
+    - protocol: TCP
+      port: 5432
+  egress:
+  - {} # Allow all outbound traffic
