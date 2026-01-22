@@ -9,6 +9,7 @@ This platform provides:
 - **Catalog Management**: PostgreSQL-based catalog for entity storage and discovery
 - **Kubernetes Integration**: Production-ready deployments for minikube and Kubernetes
 - **Template System**: Reusable templates for consistent service creation
+- **Git Integration**: Complete source code repositories with all generated files
 
 ## 📁 Project Structure
 

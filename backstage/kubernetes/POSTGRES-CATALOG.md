@@ -35,6 +35,8 @@ echo -n "backstage_catalog" | base64
 kubectl apply -f postgres-catalog-deployment.yaml
 ```
 
+**Note**: The scaffolder service v5+ includes fixes for Git repository file creation. All scaffolded services will have their complete source code committed to GitHub repositories.
+
 ### 4. Verify Deployment
 ```bash
 # Check PostgreSQL pod status

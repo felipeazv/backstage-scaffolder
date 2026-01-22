@@ -48,7 +48,7 @@ spec:
         #   - docker.io/yourorg/scaffolder-service:v8
         #   - gcr.io/your-project/scaffolder-service:v8
         #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v21
-        image: YOUR_REGISTRY/scaffolder-service:v21
+        image: YOUR_REGISTRY/scaffolder-service:v5  # Fixed Git repository file creation issue
         imagePullPolicy: Always
         env:
         - name: GITHUB_TOKEN
