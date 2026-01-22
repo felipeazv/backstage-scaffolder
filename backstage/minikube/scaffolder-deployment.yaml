@@ -20,7 +20,7 @@ spec:
       serviceAccountName: scaffolder-deployer
       containers:
       - name: scaffolder-service
-        image: scaffolder-service:v16
+        image: scaffolder-service:v21
         imagePullPolicy: Never
         env:
         - name: GITHUB_TOKEN
@@ -37,6 +37,17 @@ spec:
           value: "3000"
         - name: ALLOW_NAMESPACE_CREATION
           value: "true"
+        # PostgreSQL Catalog Database Configuration
+        - name: POSTGRES_HOST
+          value: "postgres-catalog.backstage.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DB
+          value: "backstage_catalog"
+        - name: POSTGRES_USER
+          value: "backstage"
+        - name: POSTGRES_PASSWORD
+          value: "backstage_dev_password"
         ports:
         - containerPort: 3000
           name: http

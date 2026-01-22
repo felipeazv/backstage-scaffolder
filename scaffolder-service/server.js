@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, exec } = require('child_process');
 const { promisify } = require('util');
+const { Pool } = require('pg');
 
 const execAsync = promisify(exec);
 
@@ -20,6 +21,209 @@ app.use(bodyParser.json());
 const PROJECTS_DIR = '/projects/scaffolded-projects';
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || '';
 const GITHUB_OWNER = process.env.GITHUB_OWNER || 'felipeazv';
+
+// Database connection configuration
+const DB_CONFIG = {
+  host: process.env.POSTGRES_HOST || 'postgres-catalog.backstage.svc.cluster.local',
+  port: process.env.POSTGRES_PORT || 5432,
+  database: process.env.POSTGRES_DB || 'backstage_catalog', 
+  user: process.env.POSTGRES_USER || 'backstage',
+  password: process.env.POSTGRES_PASSWORD || 'backstage_dev_password',
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+};
+
+// Create PostgreSQL connection pool
+const db = new Pool(DB_CONFIG);
+
+// Database connection test and initialization
+async function initializeDatabase() {
+  try {
+    const client = await db.connect();
+    await client.query('SELECT NOW()');
+    client.release();
+    console.log('[DATABASE] ✅ PostgreSQL connection established successfully');
+    console.log(`[DATABASE] Connected to: ${DB_CONFIG.host}:${DB_CONFIG.port}/${DB_CONFIG.database}`);
+  } catch (error) {
+    console.error('[DATABASE] ❌ Failed to connect to PostgreSQL:', error.message);
+    console.error('[DATABASE] Falling back to file-based storage');
+  }
+}
+
+// Initialize database connection
+initializeDatabase();
+
+// ===============================
+// CATALOG DATABASE FUNCTIONS
+// ===============================
+
+/**
+ * Create or update a catalog entity in the database
+ */
+async function createOrUpdateEntity(entityData) {
+  try {
+    const client = await db.connect();
+    
+    const {
+      name,
+      kind = 'Component',
+      namespace = 'default',
+      metadata = {},
+      spec = {},
+      relations = [],
+      originatingLocation = { type: 'scaffolder', target: 'local-generation' }
+    } = entityData;
+
+    const entityRef = `${namespace}/${kind.toLowerCase()}:${name}`;
+    const finalEntity = {
+      apiVersion: 'backstage.io/v1alpha1',
+      kind,
+      metadata: { name, namespace, ...metadata },
+      spec,
+      relations
+    };
+
+    // Insert or update entity
+    const query = `
+      INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, relations, final_entity, originating_location)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (entity_ref) 
+      DO UPDATE SET 
+        metadata = EXCLUDED.metadata,
+        spec = EXCLUDED.spec,
+        relations = EXCLUDED.relations,
+        final_entity = EXCLUDED.final_entity,
+        updated_at = NOW()
+      RETURNING *;
+    `;
+
+    const result = await client.query(query, [
+      entityRef, kind, namespace, name,
+      JSON.stringify(finalEntity.metadata),
+      JSON.stringify(finalEntity.spec),
+      JSON.stringify(relations),
+      JSON.stringify(finalEntity),
+      JSON.stringify(originatingLocation)
+    ]);
+
+    // Insert entity location
+    await client.query(`
+      INSERT INTO entity_locations (entity_ref, location_type, location_target)
+      VALUES ($1, $2, $3)
+      ON CONFLICT DO NOTHING
+    `, [entityRef, originatingLocation.type, originatingLocation.target]);
+
+    client.release();
+    return result.rows[0];
+  } catch (error) {
+    console.error('[CATALOG] Error creating/updating entity:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get all entities from catalog
+ */
+async function getAllEntities(filters = {}) {
+  try {
+    const client = await db.connect();
+    
+    let query = 'SELECT * FROM entities';
+    const conditions = [];
+    const params = [];
+    let paramCount = 1;
+
+    if (filters.kind) {
+      conditions.push(`kind = $${paramCount++}`);
+      params.push(filters.kind);
+    }
+    
+    if (filters.namespace) {
+      conditions.push(`namespace = $${paramCount++}`);
+      params.push(filters.namespace);
+    }
+
+    if (filters.owner) {
+      conditions.push(`spec->>'owner' = $${paramCount++}`);
+      params.push(filters.owner);
+    }
+
+    if (conditions.length > 0) {
+      query += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    query += ' ORDER BY created_at DESC';
+
+    const result = await client.query(query, params);
+    client.release();
+    
+    return result.rows.map(row => ({
+      ...row.final_entity,
+      entityRef: row.entity_ref,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  } catch (error) {
+    console.error('[CATALOG] Error fetching entities:', error);
+    return [];
+  }
+}
+
+/**
+ * Get entity by reference
+ */
+async function getEntityByRef(entityRef) {
+  try {
+    const client = await db.connect();
+    const result = await client.query('SELECT * FROM entities WHERE entity_ref = $1', [entityRef]);
+    client.release();
+    
+    if (result.rows.length === 0) return null;
+    
+    const row = result.rows[0];
+    return {
+      ...row.final_entity,
+      entityRef: row.entity_ref,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  } catch (error) {
+    console.error('[CATALOG] Error fetching entity:', error);
+    return null;
+  }
+}
+
+/**
+ * Delete entity by reference
+ */
+async function deleteEntity(entityRef) {
+  try {
+    const client = await db.connect();
+    const result = await client.query('DELETE FROM entities WHERE entity_ref = $1', [entityRef]);
+    client.release();
+    return result.rowCount > 0;
+  } catch (error) {
+    console.error('[CATALOG] Error deleting entity:', error);
+    return false;
+  }
+}
+
+/**
+ * Check if database is available
+ */
+async function isDatabaseAvailable() {
+  try {
+    const client = await db.connect();
+    await client.query('SELECT 1');
+    client.release();
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Constants already declared earlier in the file
 
 // Namespace safety
 const FORBIDDEN_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease']);
@@ -308,6 +512,49 @@ app.post('/api/scaffold', async (req, res) => {
     fs.writeFileSync(path.join(projectDir, '.gitignore'), gitignore);
 
     console.log(`[SUCCESS] Project created at ${projectDir}`);
+
+    // Register entity in Backstage catalog database
+    if (await isDatabaseAvailable()) {
+      try {
+        const entityData = {
+          name: component_id,
+          kind: 'Component',
+          namespace: FORCED_TARGET_NAMESPACE,
+          metadata: {
+            name: component_id,
+            description: description || `A Spring Boot microservice generated by Backstage Scaffolder`,
+            annotations: {
+              'github.com/project-slug': GITHUB_ENABLED ? `${GITHUB_OWNER}/${component_id}` : `${owner}/${component_id}`,
+              'backstage.io/kubernetes-label-selector': `app=${component_id}`,
+              'backstage.io/kubernetes-namespace': FORCED_TARGET_NAMESPACE
+            },
+            labels: {
+              'backstage.io/scaffolder-task-id': 'manual-scaffold',
+              'java-version': java_version || '21',
+              'spring-boot': 'true'
+            }
+          },
+          spec: {
+            type: 'service',
+            owner: owner || 'unknown',
+            lifecycle: 'production',
+            system: 'backend-services'
+          },
+          originatingLocation: {
+            type: 'scaffolder',
+            target: `scaffolder-service:${component_id}`
+          }
+        };
+
+        const catalogEntity = await createOrUpdateEntity(entityData);
+        console.log(`[CATALOG] ✅ Registered entity in catalog: ${catalogEntity.entity_ref}`);
+      } catch (error) {
+        console.error('[CATALOG] ❌ Failed to register entity in catalog:', error.message);
+        // Continue - don't fail scaffolding due to catalog issues
+      }
+    } else {
+      console.log('[CATALOG] ⚠️ Database not available, skipping catalog registration');
+    }
 
     // Create GitHub repository and push code
     if (GITHUB_ENABLED) {
@@ -1331,16 +1578,77 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
 // List all services endpoint
 app.get('/api/list-services', async (req, res) => {
   try {
-    const services = [];
-    
-    // List local project directories
+    let services = [];
+
+    // Try to fetch from catalog database first
+    if (await isDatabaseAvailable()) {
+      try {
+        const entities = await getAllEntities({ kind: 'Component' });
+        console.log(`[LIST-SERVICES] ✅ Retrieved ${entities.length} entities from catalog database`);
+
+        services = await Promise.all(entities.map(async (entity) => {
+          const serviceName = entity.metadata.name;
+          const namespace = entity.metadata.namespace || 'default';
+
+          // Check if service exists in Kubernetes
+          let hasK8s = false;
+          try {
+            execSync(`kubectl get deployment -n ${namespace} ${serviceName}`, { stdio: 'pipe' });
+            hasK8s = true;
+          } catch (e) {
+            // Service not deployed
+          }
+
+          // Check if Git repo exists
+          let hasGit = false;
+          let gitUrl = null;
+          if (GITHUB_ENABLED) {
+            try {
+              const result = execSync(`gh repo view ${GITHUB_OWNER}/${serviceName} --json url`, { encoding: 'utf8' });
+              const repoInfo = JSON.parse(result);
+              hasGit = true;
+              gitUrl = repoInfo.url;
+            } catch (e) {
+              // Repo doesn't exist
+            }
+          }
+
+          return {
+            name: serviceName,
+            type: entity.spec?.type || 'service',
+            owner: entity.spec?.owner || 'unknown',
+            description: entity.metadata?.description || 'A Spring Boot microservice',
+            lifecycle: entity.spec?.lifecycle || 'production',
+            namespace: namespace,
+            entityRef: entity.entityRef,
+            hasK8s,
+            hasGit,
+            gitUrl,
+            createdAt: entity.createdAt,
+            source: 'catalog'
+          };
+        }));
+
+        res.json({
+          success: true,
+          count: services.length,
+          services,
+          source: 'catalog-database'
+        });
+        return;
+      } catch (error) {
+        console.error('[LIST-SERVICES] ❌ Database query failed, falling back to file system:', error.message);
+      }
+    }
+
+    // Fallback to file-based discovery
+    console.log('[LIST-SERVICES] Using file-based service discovery');
     if (fs.existsSync(PROJECTS_DIR)) {
       const dirs = fs.readdirSync(PROJECTS_DIR);
       
       for (const dir of dirs) {
         const projectPath = path.join(PROJECTS_DIR, dir);
         const metadataPath = path.join(projectPath, 'scaffold-metadata.json');
-        const catalogPath = path.join(projectPath, 'catalog-info.yaml');
         
         let metadata = {};
         if (fs.existsSync(metadataPath)) {
@@ -1386,6 +1694,7 @@ app.get('/api/list-services', async (req, res) => {
           hasGit,
           gitUrl,
           createdAt: metadata.createdAt,
+          source: 'filesystem'
         });
       }
     }
@@ -1393,7 +1702,8 @@ app.get('/api/list-services', async (req, res) => {
     res.json({ 
       success: true,
       count: services.length,
-      services 
+      services,
+      source: 'filesystem-fallback'
     });
   } catch (error) {
     console.error('[LIST-SERVICES] Error:', error);
@@ -1401,6 +1711,165 @@ app.get('/api/list-services', async (req, res) => {
       error: error.message,
       services: [] 
     });
+  }
+});
+
+// ===============================
+// CATALOG API ENDPOINTS
+// ===============================
+
+// Get all catalog entities
+app.get('/api/catalog/entities', async (req, res) => {
+  try {
+    if (!(await isDatabaseAvailable())) {
+      return res.status(503).json({ 
+        error: 'Catalog database not available',
+        fallbackMessage: 'Use /api/list-services for file-based service discovery' 
+      });
+    }
+
+    const filters = {};
+    if (req.query.kind) filters.kind = req.query.kind;
+    if (req.query.namespace) filters.namespace = req.query.namespace;
+    if (req.query.owner) filters.owner = req.query.owner;
+
+    const entities = await getAllEntities(filters);
+    
+    res.json({
+      success: true,
+      items: entities,
+      totalItems: entities.length,
+      filters
+    });
+  } catch (error) {
+    console.error('[CATALOG-API] Error fetching entities:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get entity by reference
+app.get('/api/catalog/entities/:namespace/:kind/:name', async (req, res) => {
+  try {
+    if (!(await isDatabaseAvailable())) {
+      return res.status(503).json({ error: 'Catalog database not available' });
+    }
+
+    const { namespace, kind, name } = req.params;
+    const entityRef = `${namespace}/${kind.toLowerCase()}:${name}`;
+    
+    const entity = await getEntityByRef(entityRef);
+    
+    if (!entity) {
+      return res.status(404).json({ error: 'Entity not found' });
+    }
+
+    res.json(entity);
+  } catch (error) {
+    console.error('[CATALOG-API] Error fetching entity:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create or update entity
+app.post('/api/catalog/entities', async (req, res) => {
+  try {
+    if (!(await isDatabaseAvailable())) {
+      return res.status(503).json({ error: 'Catalog database not available' });
+    }
+
+    const entityData = req.body;
+    
+    // Validate required fields
+    if (!entityData.name || !entityData.kind) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: name and kind are required' 
+      });
+    }
+
+    const entity = await createOrUpdateEntity(entityData);
+    
+    res.status(201).json({
+      success: true,
+      entity,
+      message: 'Entity created/updated successfully'
+    });
+  } catch (error) {
+    console.error('[CATALOG-API] Error creating entity:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete entity
+app.delete('/api/catalog/entities/:namespace/:kind/:name', async (req, res) => {
+  try {
+    if (!(await isDatabaseAvailable())) {
+      return res.status(503).json({ error: 'Catalog database not available' });
+    }
+
+    const { namespace, kind, name } = req.params;
+    const entityRef = `${namespace}/${kind.toLowerCase()}:${name}`;
+    
+    const deleted = await deleteEntity(entityRef);
+    
+    if (!deleted) {
+      return res.status(404).json({ error: 'Entity not found' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Entity deleted successfully',
+      entityRef
+    });
+  } catch (error) {
+    console.error('[CATALOG-API] Error deleting entity:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get catalog statistics
+app.get('/api/catalog/stats', async (req, res) => {
+  try {
+    if (!(await isDatabaseAvailable())) {
+      return res.status(503).json({ error: 'Catalog database not available' });
+    }
+
+    const client = await db.connect();
+    const result = await client.query(`
+      SELECT 
+        kind,
+        COUNT(*) as count
+      FROM entities 
+      GROUP BY kind 
+      ORDER BY count DESC
+    `);
+    
+    const totalResult = await client.query('SELECT COUNT(*) as total FROM entities');
+    const namespaceResult = await client.query(`
+      SELECT 
+        namespace,
+        COUNT(*) as count
+      FROM entities 
+      GROUP BY namespace 
+      ORDER BY count DESC
+    `);
+    
+    client.release();
+    
+    res.json({
+      success: true,
+      totalEntities: parseInt(totalResult.rows[0].total),
+      byKind: result.rows.map(row => ({
+        kind: row.kind,
+        count: parseInt(row.count)
+      })),
+      byNamespace: namespaceResult.rows.map(row => ({
+        namespace: row.namespace,
+        count: parseInt(row.count)
+      }))
+    });
+  } catch (error) {
+    console.error('[CATALOG-API] Error fetching stats:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -1422,10 +1891,14 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       postgres: { statefulset: false, service: false, secret: false, pvc: false },
       error: null 
     },
-    localStorage: { deleted: false, error: null }
+    localStorage: { deleted: false, error: null },
+    catalog: { deleted: false, error: null }
   };
   
   try {
+    // Get metadata path once for all cleanup operations
+    const metaPath = path.join(PROJECTS_DIR, serviceName, 'scaffold-metadata.json');
+    
     // Delete GitHub repository
     if (GITHUB_ENABLED) {
       try {
@@ -1442,7 +1915,6 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
     try {
       let nsArg = '';
       let namespace = '';
-      const metaPath = path.join(PROJECTS_DIR, serviceName, 'scaffold-metadata.json');
       if (fs.existsSync(metaPath)) {
         const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
         if (meta && meta.namespace) {
@@ -1514,6 +1986,55 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
       results.localStorage.deleted = true;
       console.log(`[CLEANUP] Deleted local storage: ${projectDir}`);
     }
+
+    // Delete entity from catalog database
+    if (await isDatabaseAvailable()) {
+      try {
+        // Get namespace from metadata if available
+        let entityNamespace = 'development'; // default
+        if (fs.existsSync(metaPath)) {
+          try {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            if (meta && meta.namespace) {
+              entityNamespace = meta.namespace;
+            }
+          } catch (e) {
+            // Use default namespace
+          }
+        }
+
+        // Try to find entity by service name in different namespaces
+        const possibleEntityRefs = [
+          `${entityNamespace}/component:${serviceName}`,
+          `development/component:${serviceName}`,
+          `default/component:${serviceName}`
+        ];
+
+        let entityDeleted = false;
+        for (const entityRef of possibleEntityRefs) {
+          try {
+            const deleted = await deleteEntity(entityRef);
+            if (deleted) {
+              results.catalog.deleted = true;
+              entityDeleted = true;
+              console.log(`[CLEANUP] ✅ Deleted catalog entity: ${entityRef}`);
+              break;
+            }
+          } catch (error) {
+            // Continue trying other possible refs
+          }
+        }
+
+        if (!entityDeleted) {
+          console.log(`[CLEANUP] ⚠️ Catalog entity not found for: ${serviceName}`);
+        }
+      } catch (error) {
+        results.catalog.error = error.message;
+        console.error(`[CLEANUP] ❌ Failed to delete catalog entity: ${error.message}`);
+      }
+    } else {
+      console.log('[CLEANUP] ⚠️ Catalog database not available, skipping entity deletion');
+    }
     
     res.json({
       success: true,
@@ -1541,7 +2062,8 @@ app.delete('/api/cleanup-all', async (req, res) => {
       postgres: { deleted: [], errors: [] },
       errors: [] 
     },
-    localStorage: { deleted: [], errors: [] }
+    localStorage: { deleted: [], errors: [] },
+    catalog: { deleted: [], errors: [] }
   };
   
   try {
@@ -1631,6 +2153,40 @@ app.delete('/api/cleanup-all', async (req, res) => {
           console.log(`[CLEANUP-ALL] Deleted local storage: ${projectDir}`);
         } catch (error) {
           results.localStorage.errors.push({ service: serviceName, error: error.message });
+        }
+
+        // Delete entity from catalog database
+        if (await isDatabaseAvailable()) {
+          try {
+            // Try to find entity by service name in different namespaces
+            const possibleEntityRefs = [
+              `development/component:${serviceName}`,
+              `default/component:${serviceName}`,
+              `${namespace || 'development'}/component:${serviceName}`
+            ];
+
+            let entityDeleted = false;
+            for (const entityRef of possibleEntityRefs) {
+              try {
+                const deleted = await deleteEntity(entityRef);
+                if (deleted) {
+                  results.catalog.deleted.push(serviceName);
+                  entityDeleted = true;
+                  console.log(`[CLEANUP-ALL] ✅ Deleted catalog entity: ${entityRef}`);
+                  break;
+                }
+              } catch (error) {
+                // Continue trying other possible refs
+              }
+            }
+
+            if (!entityDeleted) {
+              console.log(`[CLEANUP-ALL] ⚠️ Catalog entity not found for: ${serviceName}`);
+            }
+          } catch (error) {
+            results.catalog.errors.push({ service: serviceName, error: error.message });
+            console.error(`[CLEANUP-ALL] ❌ Failed to delete catalog entity for ${serviceName}: ${error.message}`);
+          }
         }
       }
     }

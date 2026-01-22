@@ -1,0 +1,244 @@
+---
+# PostgreSQL Deployment for Backstage Catalog
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-catalog
+  namespace: backstage
+  labels:
+    app: postgres-catalog
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-catalog
+  template:
+    metadata:
+      labels:
+        app: postgres-catalog
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_DB
+          value: backstage_catalog
+        - name: POSTGRES_USER
+          value: backstage
+        - name: POSTGRES_PASSWORD
+          value: backstage_dev_password
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - containerPort: 5432
+          name: postgres
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: init-scripts
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U backstage -d backstage_catalog
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - pg_isready -U backstage -d backstage_catalog
+          initialDelaySeconds: 15
+          periodSeconds: 5
+      volumes:
+      - name: postgres-storage
+        emptyDir: {} # For local development - data will not persist across pod restarts
+      - name: init-scripts
+        configMap:
+          name: postgres-init-scripts
+---
+# PostgreSQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-catalog
+  namespace: backstage
+  labels:
+    app: postgres-catalog
+spec:
+  ports:
+  - port: 5432
+    targetPort: 5432
+    name: postgres
+  selector:
+    app: postgres-catalog
+  type: ClusterIP
+---
+# ConfigMap with database initialization scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: backstage
+data:
+  01-init-schema.sql: |
+    -- Backstage Catalog Database Schema
+    -- Based on Backstage Entity Specification v1alpha1
+    
+    -- Enable UUID extension
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+    
+    -- Create entities table
+    CREATE TABLE entities (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_ref VARCHAR(512) UNIQUE NOT NULL, -- namespace/kind:name format
+        api_version VARCHAR(50) NOT NULL DEFAULT 'backstage.io/v1alpha1',
+        kind VARCHAR(50) NOT NULL, -- Component, API, Resource, System, Domain, etc.
+        namespace VARCHAR(63) NOT NULL DEFAULT 'default',
+        name VARCHAR(63) NOT NULL,
+        metadata JSONB NOT NULL, -- Full metadata object (title, description, annotations, labels, etc.)
+        spec JSONB, -- Spec object (type, lifecycle, owner, etc.)
+        relations JSONB, -- Array of relations (dependsOn, ownedBy, etc.)
+        final_entity JSONB NOT NULL, -- Complete processed entity
+        originating_location JSONB, -- Source location info
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+    
+    -- Create indexes for efficient queries
+    CREATE INDEX idx_entities_kind ON entities(kind);
+    CREATE INDEX idx_entities_namespace ON entities(namespace);
+    CREATE INDEX idx_entities_name ON entities(name);
+    CREATE INDEX idx_entities_kind_namespace ON entities(kind, namespace);
+    CREATE INDEX idx_entities_created_at ON entities(created_at);
+    CREATE INDEX idx_entities_updated_at ON entities(updated_at);
+    
+    -- GIN indexes for JSONB queries
+    CREATE INDEX idx_entities_metadata_gin ON entities USING gin(metadata);
+    CREATE INDEX idx_entities_spec_gin ON entities USING gin(spec);
+    CREATE INDEX idx_entities_relations_gin ON entities USING gin(relations);
+    
+    -- Specific indexes for common metadata queries
+    CREATE INDEX idx_entities_metadata_labels ON entities USING gin((metadata->'labels'));
+    CREATE INDEX idx_entities_metadata_annotations ON entities USING gin((metadata->'annotations'));
+    CREATE INDEX idx_entities_spec_owner ON entities USING gin((spec->'owner'));
+    CREATE INDEX idx_entities_spec_type ON entities USING gin((spec->'type'));
+    CREATE INDEX idx_entities_spec_lifecycle ON entities USING gin((spec->'lifecycle'));
+    
+    -- Create entity relations table for efficient relationship queries
+    CREATE TABLE entity_relations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        source_entity_ref VARCHAR(512) NOT NULL,
+        target_entity_ref VARCHAR(512) NOT NULL,
+        relation_type VARCHAR(50) NOT NULL, -- dependsOn, ownedBy, partOf, etc.
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        FOREIGN KEY (source_entity_ref) REFERENCES entities(entity_ref) ON DELETE CASCADE,
+        UNIQUE(source_entity_ref, target_entity_ref, relation_type)
+    );
+    
+    CREATE INDEX idx_relations_source ON entity_relations(source_entity_ref);
+    CREATE INDEX idx_relations_target ON entity_relations(target_entity_ref);
+    CREATE INDEX idx_relations_type ON entity_relations(relation_type);
+    
+    -- Create locations table for tracking entity sources
+    CREATE TABLE entity_locations (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        entity_ref VARCHAR(512) NOT NULL,
+        location_type VARCHAR(50) NOT NULL, -- url, file, scaffolder, etc.
+        location_target TEXT NOT NULL, -- URL, file path, etc.
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        FOREIGN KEY (entity_ref) REFERENCES entities(entity_ref) ON DELETE CASCADE
+    );
+    
+    CREATE INDEX idx_locations_entity_ref ON entity_locations(entity_ref);
+    CREATE INDEX idx_locations_type ON entity_locations(location_type);
+    
+    -- Create function to update the updated_at timestamp
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+    END;
+    $$ language 'plpgsql';
+    
+    -- Create trigger to auto-update updated_at
+    CREATE TRIGGER update_entities_updated_at BEFORE UPDATE ON entities
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    
+    CREATE TRIGGER update_locations_updated_at BEFORE UPDATE ON entity_locations
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+  02-sample-data.sql: |
+    -- Insert sample catalog entities for testing
+    
+    -- Domain: E-commerce Platform
+    INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, final_entity, originating_location) VALUES
+    ('default/domain:ecommerce',
+     'Domain', 
+     'default', 
+     'ecommerce',
+     '{"name": "ecommerce", "description": "E-commerce platform domain", "labels": {"team": "platform"}}',
+     '{"owner": "platform-team"}',
+     '{"apiVersion": "backstage.io/v1alpha1", "kind": "Domain", "metadata": {"name": "ecommerce", "description": "E-commerce platform domain", "labels": {"team": "platform"}}, "spec": {"owner": "platform-team"}}',
+     '{"type": "bootstrap", "target": "catalog-init"}'
+    );
+    
+    -- System: User Management
+    INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, final_entity, originating_location) VALUES
+    ('default/system:user-management',
+     'System',
+     'default',
+     'user-management', 
+     '{"name": "user-management", "description": "User authentication and profile management system", "labels": {"domain": "ecommerce"}}',
+     '{"owner": "user-team", "domain": "ecommerce"}',
+     '{"apiVersion": "backstage.io/v1alpha1", "kind": "System", "metadata": {"name": "user-management", "description": "User authentication and profile management system", "labels": {"domain": "ecommerce"}}, "spec": {"owner": "user-team", "domain": "ecommerce"}}',
+     '{"type": "bootstrap", "target": "catalog-init"}'
+    );
+    
+    -- API: User Service API
+    INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, final_entity, originating_location) VALUES
+    ('default/api:user-api',
+     'API',
+     'default',
+     'user-api',
+     '{"name": "user-api", "description": "RESTful API for user operations", "labels": {"system": "user-management"}}',
+     '{"type": "openapi", "lifecycle": "production", "owner": "user-team", "system": "user-management", "definition": {"$text": "https://api.example.com/openapi.yaml"}}',
+     '{"apiVersion": "backstage.io/v1alpha1", "kind": "API", "metadata": {"name": "user-api", "description": "RESTful API for user operations", "labels": {"system": "user-management"}}, "spec": {"type": "openapi", "lifecycle": "production", "owner": "user-team", "system": "user-management", "definition": {"$text": "https://api.example.com/openapi.yaml"}}}',
+     '{"type": "bootstrap", "target": "catalog-init"}'
+    );
+    
+    -- Resource: User Database
+    INSERT INTO entities (entity_ref, kind, namespace, name, metadata, spec, final_entity, originating_location) VALUES
+    ('default/resource:user-database',
+     'Resource',
+     'default',
+     'user-database',
+     '{"name": "user-database", "description": "PostgreSQL database for user data", "labels": {"system": "user-management"}}',
+     '{"type": "database", "owner": "user-team", "system": "user-management"}',
+     '{"apiVersion": "backstage.io/v1alpha1", "kind": "Resource", "metadata": {"name": "user-database", "description": "PostgreSQL database for user data", "labels": {"system": "user-management"}}, "spec": {"type": "database", "owner": "user-team", "system": "user-management"}}',
+     '{"type": "bootstrap", "target": "catalog-init"}'
+    );
+
+  03-grant-permissions.sql: |
+    -- Grant necessary permissions to backstage user
+    GRANT ALL PRIVILEGES ON DATABASE backstage_catalog TO backstage;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO backstage;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO backstage;
+    GRANT USAGE ON SCHEMA public TO backstage;
+    
+    -- Grant permissions for future objects
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO backstage;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO backstage;
