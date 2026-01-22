@@ -261,9 +261,15 @@ async function checkGitHubRepoExists(repoName) {
   if (!GITHUB_ENABLED) return false;
   
   try {
-    await execAsync(`gh repo view ${GITHUB_OWNER}/${repoName}`);
+    console.log(`[GITHUB] Checking if repository exists: ${GITHUB_OWNER}/${repoName}`);
+    // Add timeout to prevent hanging
+    const { stdout } = await execAsync(`timeout 10 gh repo view ${GITHUB_OWNER}/${repoName}`, { 
+      timeout: 15000 // 15 second timeout
+    });
+    console.log(`[GITHUB] Repository ${GITHUB_OWNER}/${repoName} exists`);
     return true;
   } catch (error) {
+    console.log(`[GITHUB] Repository ${GITHUB_OWNER}/${repoName} does not exist or check failed: ${error.message}`);
     return false;
   }
 }
@@ -355,6 +361,17 @@ app.get('/health', (req, res) => {
 
 // Main scaffolding endpoint
 app.post('/api/scaffold', async (req, res) => {
+  // Set a timeout for the entire request (5 minutes)
+  req.setTimeout(300000, () => {
+    console.error('[SCAFFOLD] Request timeout - operation took longer than 5 minutes');
+    if (!res.headersSent) {
+      res.status(504).json({ 
+        error: 'Scaffolding operation timed out after 5 minutes',
+        details: 'The service creation process took too long to complete'
+      });
+    }
+  });
+  
   try {
     const {
       component_id,
