@@ -239,3 +239,40 @@ minikube stop
 # Delete Minikube cluster (complete cleanup)
 minikube delete
 ```
+
+## External Service Access (Important)
+
+### Accessing Scaffolded Services
+
+⚠️ **LoadBalancer External IP Limitations**: When using minikube with Docker driver on macOS, external LoadBalancer IPs (like `192.168.49.100`) exist only inside the Docker container and are not directly accessible from your host machine.
+
+**Recommended Methods:**
+
+**Option 1: minikube service (Most Reliable)**
+```bash
+# Get direct access to any scaffolded service
+minikube service <service-name> -n development
+
+# Example:
+minikube service java-21-service -n development
+# Opens browser or provides localhost URL like http://127.0.0.1:52431
+```
+
+**Option 2: Port Forwarding (Development)**
+```bash
+# Forward service port to localhost
+kubectl port-forward -n development svc/<service-name> 8080:8080
+
+# Access via http://localhost:8080
+```
+
+**Why This Happens:**
+- minikube runs in Docker container on macOS
+- External IPs are internal to the container network
+- `minikube tunnel` has limited reliability with Docker driver
+- Port forwarding and `minikube service` create proper host-to-container bridges
+
+**Service Types:**
+- All scaffolded services use **NodePort** by default
+- LoadBalancer can be configured but requires `minikube tunnel`
+- For reliable external access, use the methods above regardless of service type

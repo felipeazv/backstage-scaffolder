@@ -380,22 +380,37 @@ kubectl get pvc -n development
 
 ### Access a Scaffolded Service
 
-Generated services deploy to the `development` namespace. To access them:
+Generated services deploy to the `development` namespace by default (or `stage` in production environment). To access them:
 
-**Option 1: Port forwarding**
+**⭐ Recommended: minikube service (Most Reliable)**
 ```bash
-kubectl port-forward -n development service/<service-name>-service <port>:<port>
+# Opens browser or provides localhost URL
+minikube service <service-name>-service -n development
+
+# Example output: http://127.0.0.1:52431
+# This method bypasses Docker networking limitations
 ```
 
-**Option 2: Minikube service**
+**Option 2: Port forwarding (Development)**
 ```bash
-minikube service <service-name>-service -n development
+kubectl port-forward -n development svc/<service-name>-service 8080:8080
+# Access via http://localhost:8080
 ```
 
 **Option 3: Get NodePort URL**
 ```bash
 minikube service <service-name>-service --url -n development
+# Returns localhost URL for programmatic access
 ```
+
+#### ⚠️ Important: External IP Limitations
+
+When using minikube with Docker driver on macOS:
+- **LoadBalancer external IPs** (like `192.168.49.100`) exist only inside Docker container
+- **NodePort direct access** via minikube IP may not work due to Docker networking
+- **`minikube tunnel`** has limited reliability on macOS with Docker driver
+
+**✅ Always use `minikube service` or `kubectl port-forward` for reliable external access**
 
 ### Database Management
 
@@ -639,6 +654,102 @@ Re-load custom images after Minikube restart:
 cd scaffolder-service
 docker build -t scaffolder-service:latest .
 minikube image load scaffolder-service:latest
+```
+
+## Environment Switching
+
+The project includes environment switching capabilities for different deployment targets:
+
+### Switch Between Development and Production
+
+```bash
+# Switch to production environment (backstage-prod namespace)
+./switch-env.sh prod
+
+# Switch to development environment (backstage namespace)  
+./switch-env.sh dev
+
+# Check current environment
+kubectl config current-context
+kubectl get pods -n backstage
+kubectl get pods -n backstage-prod
+```
+
+### How It Works
+
+The `switch-env.sh` script manages deployments across two isolated environments:
+
+**Development Environment (`./switch-env.sh dev`):**
+- Deploys Backstage platform to `backstage` namespace
+- Scaffolder targets `development` namespace for new services
+- Ideal for feature development and testing
+
+**Production Environment (`./switch-env.sh prod`):**
+- Deploys Backstage platform to `backstage-prod` namespace
+- Scaffolder targets `stage` namespace for new services
+- Used for staging, QA, and production-like testing
+
+### Environment Configuration
+
+Environment targeting is controlled by the `TARGET_NAMESPACE` environment variable in the scaffolder service:
+
+```yaml
+# Development environment
+env:
+  - name: TARGET_NAMESPACE
+    value: "development"  # New services go here
+
+# Production environment
+env:
+  - name: TARGET_NAMESPACE
+    value: "stage"       # New services go here
+```
+
+### Namespace Architecture
+
+```
+backstage/              # Development environment
+├── backstage           # Backstage app
+├── scaffolder-service  # Targets 'development' namespace
+└── secrets/configs
+
+backstage-prod/         # Production environment
+├── backstage           # Backstage app (prod config)
+├── scaffolder-service  # Targets 'stage' namespace
+└── secrets/configs
+
+development/            # Generated services (dev env)
+stage/                  # Generated services (prod env)
+```
+
+### Use Cases
+
+**Team Workflow:**
+```bash
+# Developer working on new features
+./switch-env.sh dev
+# Deploy and test services in development namespace
+
+# QA testing release candidates  
+./switch-env.sh prod
+# Deploy and test services in stage namespace
+```
+
+**CI/CD Integration:**
+- Different pipelines can target different environments
+- Automated testing in stage namespace
+- Development work isolated in development namespace
+
+### External Service Access
+
+Services in both environments can be accessed using the same methods:
+
+```bash
+# Development environment services
+minikube service <service-name> -n development
+
+# Production environment services (stage namespace)
+minikube service <service-name> -n stage
 ```
 
 ## Technologies
