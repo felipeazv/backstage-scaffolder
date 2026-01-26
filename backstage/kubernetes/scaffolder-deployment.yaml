@@ -43,12 +43,12 @@ spec:
         fsGroup: 1000
       containers:
       - name: scaffolder-service
-        # CHANGE THIS: Use your container registry
+        # CHANGE THIS: Use your container registry for production
         # Examples: 
-        #   - docker.io/yourorg/scaffolder-service:v8
-        #   - gcr.io/your-project/scaffolder-service:v8
-        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v21
-        image: YOUR_REGISTRY/scaffolder-service:v5  # Fixed Git repository file creation issue
+        #   - docker.io/yourorg/scaffolder-service:v9
+        #   - gcr.io/your-project/scaffolder-service:v9
+        #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v9
+        image: scaffolder-service:v9  # Enhanced CORS, logging, and error handling
         imagePullPolicy: Always
         env:
         - name: GITHUB_TOKEN
@@ -57,7 +57,7 @@ spec:
               name: github-token
               key: token
         - name: GITHUB_OWNER
-          value: "YOUR_GITHUB_USERNAME"  # CHANGE THIS to your GitHub username or organization
+          value: "felipeazv"  # GitHub username or organization
         # PostgreSQL catalog database configuration
         - name: POSTGRES_HOST
           value: "postgres-catalog.backstage.svc.cluster.local"

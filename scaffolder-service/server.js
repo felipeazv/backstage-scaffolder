@@ -16,6 +16,24 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
+
+// Add middleware to set additional headers for Backstage compatibility
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Max-Age', '3600');
+  res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.header('X-Content-Type-Options', 'nosniff');
+  
+  // Log all requests
+  const timestamp = new Date().toISOString();
+  const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+  console.log(`[${timestamp}] ${req.method} ${req.url} from ${clientIP}`);
+  
+  next();
+});
+
 app.use(bodyParser.json());
 
 const PROJECTS_DIR = '/projects/scaffolded-projects';
@@ -361,6 +379,10 @@ app.get('/health', (req, res) => {
 
 // Main scaffolding endpoint
 app.post('/api/scaffold', async (req, res) => {
+  const startTime = Date.now();
+  const clientIP = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'] || 'unknown';
+  console.log(`[SCAFFOLD] Request started from ${clientIP} at ${new Date().toISOString()}`);
+  
   // Set a timeout for the entire request (5 minutes)
   req.setTimeout(300000, () => {
     console.error('[SCAFFOLD] Request timeout - operation took longer than 5 minutes');
@@ -377,7 +399,7 @@ app.post('/api/scaffold', async (req, res) => {
       component_id,
       description: userDescription,
       owner,
-      port,
+      port: userPort,
       java_version,
       persistence,
       include_docker,
@@ -387,6 +409,8 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Use user description or default
     const description = userDescription || 'A Spring Boot microservice created with Backstage and Scaffolder';
+    // Default port to 8080 if not provided
+    const port = userPort || 8080;
 
     console.log(`[SCAFFOLD] Creating service: ${component_id}`);
 
@@ -507,10 +531,11 @@ app.post('/api/scaffold', async (req, res) => {
 
     // Generate K8s manifests
     if (include_k8s) {
-      const deployment = generateK8sDeployment(prefixedComponentId, component_id, owner, port, FORCED_TARGET_NAMESPACE, persistence);
+      const numericPort = parseInt(port) || 8080;
+      const deployment = generateK8sDeployment(prefixedComponentId, component_id, owner, numericPort, FORCED_TARGET_NAMESPACE, persistence);
       fs.writeFileSync(path.join(k8sDir, 'deployment.yaml'), deployment);
 
-      const service = generateK8sService(prefixedComponentId, port, FORCED_TARGET_NAMESPACE);
+      const service = generateK8sService(prefixedComponentId, numericPort, FORCED_TARGET_NAMESPACE);
       fs.writeFileSync(path.join(k8sDir, 'service.yaml'), service);
       
       // Generate PostgreSQL resources if persistence is enabled
@@ -679,7 +704,14 @@ app.post('/api/scaffold', async (req, res) => {
       ]
     });
 
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    console.log(`[SCAFFOLD] ✅ Request completed successfully for ${component_id} in ${duration}ms from ${clientIP}`);
+
   } catch (error) {
+    const endTime = Date.now();
+    const duration = endTime - startTime;
+    console.error(`[SCAFFOLD] ❌ Request failed for ${component_id || 'unknown'} after ${duration}ms from ${clientIP}:`, error.message);
     console.error('[ERROR]', error);
     res.status(500).json({ 
       error: error.message,
@@ -710,12 +742,21 @@ async function deployToKubernetes(serviceName, projectDir, namespace) {
   if (fs.existsSync(dockerfilePath)) {
     console.log(`[DEPLOY] Building Docker image for ${serviceName}:v1`);
     try {
+      // Test if Docker daemon is accessible
+      execSync('docker version', { stdio: 'pipe' });
+      
       execSync(`docker build -t ${serviceName}:v1 "${projectDir}"`, { stdio: 'pipe' });
       console.log(`[DEPLOY] Loading image into Minikube`);
       execSync(`minikube image load ${serviceName}:v1`, { stdio: 'pipe' });
+      console.log(`[DEPLOY] ✅ Docker image built and loaded successfully`);
     } catch (error) {
       console.warn(`[DEPLOY] Docker build/load warning: ${error.message}`);
-      // Continue - deployment may still work with existing images
+      
+      // If Docker is not available, update the deployment to use a different strategy
+      if (error.message.includes('Cannot connect to the Docker daemon')) {
+        console.log(`[DEPLOY] ⚠️ Docker daemon not available, applying alternative deployment strategy`);
+        await handleMissingDockerImage(serviceName, projectDir, k8sDir, namespace);
+      }
     }
   }
 
@@ -781,6 +822,86 @@ async function deployToKubernetes(serviceName, projectDir, namespace) {
   }
 
   console.log(`[DEPLOY] Deployment completed for ${serviceName}`);
+}
+
+// Handle deployment when Docker image building is not available
+async function handleMissingDockerImage(serviceName, projectDir, k8sDir, namespace) {
+  console.log(`[DEPLOY] Implementing alternative deployment strategy for ${serviceName}`);
+  
+  // Strategy 1: Update deployment to use imagePullPolicy: IfNotPresent
+  // and add an init container or job to build the image externally
+  const deploymentPath = path.join(k8sDir, 'deployment.yaml');
+  if (fs.existsSync(deploymentPath)) {
+    let deploymentContent = fs.readFileSync(deploymentPath, 'utf8');
+    
+    // Log the issue for monitoring
+    console.log(`[DEPLOY] 🚨 WARNING: Docker image ${serviceName}:v1 was not built due to Docker daemon unavailability`);
+    console.log(`[DEPLOY] 📝 Manual steps required:`);
+    console.log(`[DEPLOY]    1. Copy project from: /projects/scaffolded-projects/${serviceName}`);
+    console.log(`[DEPLOY]    2. Build locally: docker build -t ${serviceName}:v1 .`);
+    console.log(`[DEPLOY]    3. Load to minikube: minikube image load ${serviceName}:v1`);
+    console.log(`[DEPLOY]    4. Restart deployment: kubectl rollout restart deployment/${serviceName} -n ${namespace}`);
+    
+    // Create a ConfigMap with build instructions
+    const buildInstructions = `#!/bin/bash
+# Auto-generated build instructions for ${serviceName}
+# Generated on: ${new Date().toISOString()}
+
+echo "Building Docker image for ${serviceName}..."
+
+# Step 1: Copy project files from scaffolder service
+kubectl cp backstage-prod/\$(kubectl get pods -n backstage-prod -l app=scaffolder-service -o jsonpath='{.items[0].metadata.name}'):/projects/scaffolded-projects/${serviceName} /tmp/${serviceName}
+
+# Step 2: Build Docker image
+cd /tmp/${serviceName}
+docker build -t ${serviceName}:v1 .
+
+# Step 3: Load image to minikube
+minikube image load ${serviceName}:v1
+
+# Step 4: Restart deployment
+kubectl rollout restart deployment/${serviceName} -n ${namespace}
+
+echo "✅ Image building completed for ${serviceName}"
+`;
+
+    const configMapYaml = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${serviceName}-build-instructions
+  namespace: ${namespace}
+  labels:
+    app: ${serviceName}
+    component: build-instructions
+data:
+  build.sh: |
+${buildInstructions.split('\n').map(line => '    ' + line).join('\n')}
+  readme.txt: |
+    This ConfigMap contains build instructions for ${serviceName}.
+    
+    The Docker image was not built automatically because the scaffolder
+    service doesn't have access to Docker daemon.
+    
+    To complete the deployment:
+    1. Run the build.sh script from this ConfigMap
+    2. Or follow the manual steps logged in the scaffolder service
+    
+    Generated on: ${new Date().toISOString()}
+`;
+
+    const configMapPath = path.join(k8sDir, 'build-instructions.yaml');
+    fs.writeFileSync(configMapPath, configMapYaml);
+    
+    // Apply the ConfigMap
+    try {
+      const nsArg = namespace ? `-n ${namespace}` : '';
+      const { execSync } = require('child_process');
+      execSync(`kubectl apply ${nsArg} -f "${configMapPath}"`, { stdio: 'pipe' });
+      console.log(`[DEPLOY] ✅ Created build instructions ConfigMap: ${serviceName}-build-instructions`);
+    } catch (error) {
+      console.warn(`[DEPLOY] Failed to create build instructions ConfigMap: ${error.message}`);
+    }
+  }
 }
 
 // Template generators
@@ -1616,6 +1737,98 @@ app.get('/api/deploy/:serviceName/stream', async (req, res) => {
   }
 });
 
+// Build missing Docker images endpoint
+app.post('/api/build-image/:serviceName', async (req, res) => {
+  try {
+    const { serviceName } = req.params;
+    const { namespace = 'stage' } = req.body;
+    
+    console.log(`[BUILD-IMAGE] Starting image build for ${serviceName} in namespace ${namespace}`);
+    
+    const projectDir = path.join(PROJECTS_DIR, serviceName);
+    if (!fs.existsSync(projectDir)) {
+      return res.status(404).json({ 
+        error: `Service ${serviceName} not found in scaffolded projects`,
+        availableServices: fs.readdirSync(PROJECTS_DIR).filter(dir => 
+          fs.statSync(path.join(PROJECTS_DIR, dir)).isDirectory()
+        )
+      });
+    }
+    
+    const dockerfilePath = path.join(projectDir, 'Dockerfile');
+    if (!fs.existsSync(dockerfilePath)) {
+      return res.status(400).json({ 
+        error: `No Dockerfile found for service ${serviceName}`,
+        projectPath: projectDir
+      });
+    }
+    
+    try {
+      // Test Docker availability
+      execSync('docker version', { stdio: 'pipe' });
+      
+      // Build image
+      console.log(`[BUILD-IMAGE] Building Docker image ${serviceName}:v1`);
+      execSync(`docker build -t ${serviceName}:v1 "${projectDir}"`, { stdio: 'pipe' });
+      
+      // Load to minikube
+      console.log(`[BUILD-IMAGE] Loading image to minikube`);
+      execSync(`minikube image load ${serviceName}:v1`, { stdio: 'pipe' });
+      
+      // Restart deployment if it exists
+      try {
+        execSync(`kubectl rollout restart deployment/${serviceName} -n ${namespace}`, { stdio: 'pipe' });
+        console.log(`[BUILD-IMAGE] ✅ Restarted deployment ${serviceName} in ${namespace}`);
+      } catch (restartError) {
+        console.warn(`[BUILD-IMAGE] Could not restart deployment: ${restartError.message}`);
+      }
+      
+      res.json({
+        success: true,
+        message: `Docker image built and loaded successfully for ${serviceName}`,
+        imageName: `${serviceName}:v1`,
+        namespace: namespace,
+        projectPath: projectDir,
+        actions: [
+          'Built Docker image',
+          'Loaded image to minikube', 
+          'Restarted deployment (if exists)'
+        ]
+      });
+      
+    } catch (dockerError) {
+      console.error(`[BUILD-IMAGE] Docker operation failed: ${dockerError.message}`);
+      
+      if (dockerError.message.includes('Cannot connect to the Docker daemon')) {
+        res.status(503).json({
+          error: 'Docker daemon not available',
+          message: 'Cannot build image - Docker daemon is not accessible from this container',
+          manualSteps: [
+            `kubectl cp backstage-prod/$(kubectl get pods -n backstage-prod -l app=scaffolder-service -o jsonpath='{.items[0].metadata.name}'):/projects/scaffolded-projects/${serviceName} /tmp/${serviceName}`,
+            `cd /tmp/${serviceName}`,
+            `docker build -t ${serviceName}:v1 .`,
+            `minikube image load ${serviceName}:v1`,
+            `kubectl rollout restart deployment/${serviceName} -n ${namespace}`
+          ]
+        });
+      } else {
+        res.status(500).json({
+          error: 'Image build failed',
+          message: dockerError.message,
+          projectPath: projectDir
+        });
+      }
+    }
+    
+  } catch (error) {
+    console.error('[BUILD-IMAGE ERROR]', error);
+    res.status(500).json({ 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // List all services endpoint
 app.get('/api/list-services', async (req, res) => {
   try {
@@ -2029,40 +2242,27 @@ app.delete('/api/cleanup/:serviceName', async (req, res) => {
     }
 
     // Delete entity from catalog database
+    console.log(`[CLEANUP] Checking database availability for catalog cleanup...`);
     if (await isDatabaseAvailable()) {
+      console.log(`[CLEANUP] Database available, attempting catalog cleanup for: ${serviceName}`);
       try {
-        // Get namespace from metadata if available
-        let entityNamespace = 'development'; // default
-        if (fs.existsSync(metaPath)) {
-          try {
-            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-            if (meta && meta.namespace) {
-              entityNamespace = meta.namespace;
-            }
-          } catch (e) {
-            // Use default namespace
-          }
-        }
-
-        // Try to find entity by service name in different namespaces
+        // Try multiple possible entity reference patterns
         const possibleEntityRefs = [
-          `${entityNamespace}/component:${serviceName}`,
           `development/component:${serviceName}`,
+          `stage/component:${serviceName}`,
+          `production/component:${serviceName}`,
           `default/component:${serviceName}`
         ];
 
         let entityDeleted = false;
         for (const entityRef of possibleEntityRefs) {
-          try {
-            const deleted = await deleteEntity(entityRef);
-            if (deleted) {
-              results.catalog.deleted = true;
-              entityDeleted = true;
-              console.log(`[CLEANUP] ✅ Deleted catalog entity: ${entityRef}`);
-              break;
-            }
-          } catch (error) {
-            // Continue trying other possible refs
+          console.log(`[CLEANUP] Trying to delete entity: ${entityRef}`);
+          const deleted = await deleteEntity(entityRef);
+          if (deleted) {
+            results.catalog.deleted = true;
+            entityDeleted = true;
+            console.log(`[CLEANUP] ✅ Deleted catalog entity: ${entityRef}`);
+            break;
           }
         }
 

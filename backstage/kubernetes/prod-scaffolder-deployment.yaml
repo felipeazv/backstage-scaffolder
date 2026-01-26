@@ -32,12 +32,12 @@ spec:
         fsGroup: 1000
       containers:
       - name: scaffolder-service
-        # CHANGE THIS: Use your container registry
+        # CHANGE THIS: Use your container registry for production
         # Examples: 
         #   - docker.io/yourorg/scaffolder-service:v9
         #   - gcr.io/your-project/scaffolder-service:v9
         #   - your-account.dkr.ecr.region.amazonaws.com/scaffolder-service:v9
-        image: YOUR_REGISTRY/scaffolder-service:v5  # CHANGE: Use your container registry (Fixed Git file creation)
+        image: scaffolder-service:v9  # Enhanced CORS, logging, and error handling
         imagePullPolicy: Always  # Always pull latest for production
         env:
         # CRITICAL: This tells the service to deploy to 'stage' instead of 'development'
