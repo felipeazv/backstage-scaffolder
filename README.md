@@ -1,6 +1,7 @@
 # Backstage Scaffolder Project
 
-A local Backstage developer portal for scaffolding Spring Boot microservices with automated Kubernetes deployment on Minikube.
+A local and simplified version of Backstage developer portal for scaffolding Spring Boot microservices with automated Kubernetes deployment on Minikube. 
+This is not the Spofity version!
 
 > **📋 Architecture Note**: This implementation follows a **simplified deployment model** for rapid development and prototyping. Backstage performs **direct deployment to Kubernetes** without traditional CI/CD pipeline integration (Jenkins, GitLab CI, GitHub Actions, etc.). This approach enables immediate service deployment and testing, making it ideal for local development, proof-of-concepts, and learning environments. For production scenarios, consider integrating with your organization's existing CI/CD tooling.
 
